@@ -18,8 +18,17 @@ import { KanbanCardPreview } from "@/components/KanbanCardPreview";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { CardEditModal } from "@/components/CardEditModal";
 import { SearchBar } from "@/components/SearchBar";
+import { UndoRedoButtons } from "@/components/UndoRedoButtons";
 import { createId, moveCard, type BoardData, type Card } from "@/lib/kanban";
 import { useSearch } from "@/hooks/useSearch";
+import { useActionHistory } from "@/hooks/useActionHistory";
+import {
+  createCardAction,
+  deleteCardAction,
+  moveCardAction,
+  updateCardAction,
+  renameColumnAction,
+} from "@/lib/actionFactory";
 import * as api from "@/lib/api";
 
 export const KanbanBoard = () => {
@@ -40,6 +49,16 @@ export const KanbanBoard = () => {
     matchCount,
     hasActiveFilters,
   } = useSearch(board);
+
+  // Undo/redo functionality
+  const {
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+    addAction,
+    lastAction,
+  } = useActionHistory();
 
   // Custom collision detection that works better with empty containers
   const customCollisionDetection: CollisionDetection = (args) => {
@@ -104,6 +123,10 @@ export const KanbanBoard = () => {
     const cardId = active.id as string;
     const targetId = over.id as string;
     
+    // Find source column and position
+    const sourceColumn = board.columns.find(col => col.cardIds.includes(cardId));
+    const sourcePosition = sourceColumn?.cardIds.indexOf(cardId) ?? 0;
+    
     const newColumns = moveCard(board.columns, cardId, targetId);
     
     setBoard({
@@ -115,10 +138,24 @@ export const KanbanBoard = () => {
       col.cardIds.includes(cardId)
     );
     
-    if (targetColumn) {
-      const position = targetColumn.cardIds.indexOf(cardId);
+    if (targetColumn && sourceColumn) {
+      const targetPosition = targetColumn.cardIds.indexOf(cardId);
       try {
-        await api.moveCard(cardId, targetColumn.id, position);
+        await api.moveCard(cardId, targetColumn.id, targetPosition);
+        
+        // Add to undo history only if actually moved
+        if (sourceColumn.id !== targetColumn.id || sourcePosition !== targetPosition) {
+          const action = moveCardAction(
+            board,
+            setBoard,
+            cardId,
+            sourceColumn.id,
+            targetColumn.id,
+            sourcePosition,
+            targetPosition
+          );
+          addAction(action);
+        }
       } catch (err) {
         console.error('Failed to move card:', err);
         const data = await api.getBoard();
@@ -130,6 +167,9 @@ export const KanbanBoard = () => {
   const handleRenameColumn = async (columnId: string, title: string) => {
     if (!board) return;
     
+    const oldColumn = board.columns.find(col => col.id === columnId);
+    if (!oldColumn || oldColumn.title === title) return; // No change
+    
     setBoard({
       ...board,
       columns: board.columns.map((column) =>
@@ -139,6 +179,10 @@ export const KanbanBoard = () => {
 
     try {
       await api.renameColumn(columnId, title);
+      
+      // Add to undo history
+      const action = renameColumnAction(board, setBoard, columnId, oldColumn.title, title);
+      addAction(action);
     } catch (err) {
       console.error('Failed to rename column:', err);
       const data = await api.getBoard();
@@ -164,6 +208,10 @@ export const KanbanBoard = () => {
             : column
         ),
       });
+
+      // Add to undo history
+      const action = createCardAction(board, setBoard, columnId, newCard);
+      addAction(action);
     } catch (err) {
       console.error('Failed to add card:', err);
       alert('Failed to add card. Please try again.');
@@ -172,6 +220,9 @@ export const KanbanBoard = () => {
 
   const handleDeleteCard = async (columnId: string, cardId: string) => {
     if (!board) return;
+
+    const card = board.cards[cardId];
+    if (!card) return;
 
     setBoard({
       ...board,
@@ -190,6 +241,10 @@ export const KanbanBoard = () => {
 
     try {
       await api.deleteCard(cardId);
+      
+      // Add to undo history
+      const action = deleteCardAction(board, setBoard, columnId, card);
+      addAction(action);
     } catch (err) {
       console.error('Failed to delete card:', err);
       const data = await api.getBoard();
@@ -221,6 +276,18 @@ export const KanbanBoard = () => {
 
     try {
       await api.updateCard(cardId, title, details);
+      
+      // Add to undo history
+      const action = updateCardAction(
+        board,
+        setBoard,
+        cardId,
+        oldCard.title,
+        oldCard.details,
+        title,
+        details
+      );
+      addAction(action);
     } catch (err) {
       console.error('Failed to update card:', err);
       // Rollback on error
@@ -296,7 +363,14 @@ export const KanbanBoard = () => {
                 and capture quick notes without getting buried in settings.
               </p>
             </div>
-            <div className="flex gap-4">
+            <div className="flex flex-wrap gap-4">
+              <UndoRedoButtons
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onUndo={undo}
+                onRedo={redo}
+                lastAction={lastAction}
+              />
               <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--surface)] px-5 py-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--gray-text)]">
                   Focus
