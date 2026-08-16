@@ -18,69 +18,104 @@ class AIResponse(BaseModel):
 
 conversation_history: Dict[str, List[Dict[str, str]]] = {}
 
-SYSTEM_PROMPT = """You are an AI assistant helping users manage their Kanban board. The board has 5 columns with fixed IDs:
-- col-1: Backlog
-- col-2: To Do
-- col-3: In Progress
-- col-4: Review
-- col-5: Done
+def build_system_prompt(board_data: Dict) -> str:
+    """Build system prompt with actual column IDs from the board."""
+    
+    # Calculate analytics
+    total_cards = sum(len(col['cardIds']) for col in board_data.get('columns', []))
+    column_stats = {col['title']: len(col['cardIds']) for col in board_data.get('columns', [])}
+    
+    prompt = f"""You are an AI assistant helping users manage their Kanban board.
 
-You can help users by:
-1. Creating new cards in any column
-2. Updating existing card titles and details
-3. Moving cards between columns
-4. Deleting cards
-5. Answering questions about their board
+BOARD OVERVIEW:
+- Total cards: {total_cards}
+- Column distribution: {column_stats}
 
-When the user asks you to perform actions on the board, respond with a JSON object containing:
-- "response": A friendly message explaining what you did
-- "board_updates": An array of actions to perform (optional)
+COLUMNS:
+"""
+    
+    for column in board_data.get('columns', []):
+        prompt += f"- {column['id']}: {column['title']} ({len(column['cardIds'])} cards)\n"
+    
+    prompt += """
+CAPABILITIES:
 
-Each board_update has:
-- "action": "create", "update", "move", or "delete"
-- "card_id": The card ID (for update, move, delete)
-- "column_id": The target column ID (for create, move)
-- "data": Object with "title" and "details" (for create, update)
-- "position": Position in column (for move, optional)
+1. CARD MANAGEMENT:
+   - Create new cards with title and details
+   - Update existing card information
+   - Move cards between columns
+   - Delete cards
 
-Examples:
+2. ANALYTICS & INSIGHTS:
+   - Summarize board status
+   - Identify bottlenecks (columns with many cards)
+   - Suggest task prioritization
+   - Provide productivity insights
 
-User: "Create a card called 'Fix login bug' in the backlog"
-Response:
+3. SMART ASSISTANCE:
+   - Answer questions about specific cards
+   - Find cards by title or content
+   - Suggest next actions
+   - Help organize work
+
+4. BATCH OPERATIONS:
+   - Create multiple cards at once
+   - Move multiple cards together
+   - Bulk updates
+
+RESPONSE FORMAT:
+Always respond with JSON:
 {
-  "response": "I've created a new card 'Fix login bug' in the Backlog column.",
+  "response": "Your friendly message to the user",
   "board_updates": [
     {
-      "action": "create",
-      "column_id": "col-1",
-      "data": {
-        "title": "Fix login bug",
-        "details": "New task"
-      }
+      "action": "create|update|move|delete",
+      "card_id": "card-123",  // for update, move, delete
+      "column_id": "col-X",   // for create, move (use actual IDs from COLUMNS above)
+      "data": {               // for create, update
+        "title": "Card title",
+        "details": "Card details"
+      },
+      "position": 0           // for move (optional)
     }
   ]
 }
 
-User: "Move card-3 to In Progress"
+EXAMPLES:
+
+User: "What's my board status?"
 Response:
 {
-  "response": "I've moved the card to In Progress.",
+  "response": "You have """ + str(total_cards) + """ cards across """ + str(len(board_data.get('columns', []))) + """ columns. """ + (f"Your {max(column_stats, key=column_stats.get)} column has the most cards ({max(column_stats.values())}), which might be a bottleneck." if column_stats else "") + """"
+}
+
+User: "Create 3 tasks for the new feature"
+Response:
+{
+  "response": "I've created 3 tasks in your Backlog for the new feature.",
   "board_updates": [
-    {
-      "action": "move",
-      "card_id": "card-3",
-      "column_id": "col-3"
-    }
+    {"action": "create", "column_id": "col-X", "data": {"title": "Task 1", "details": "Description"}},
+    {"action": "create", "column_id": "col-X", "data": {"title": "Task 2", "details": "Description"}},
+    {"action": "create", "column_id": "col-X", "data": {"title": "Task 3", "details": "Description"}}
   ]
 }
 
-User: "What's on my board?"
+User: "Move all cards from Review to Done"
 Response:
 {
-  "response": "You have [X] cards across 5 columns: [summary of cards]"
+  "response": "I've moved all cards from Review to Done.",
+  "board_updates": [
+    {"action": "move", "card_id": "card-1", "column_id": "col-done"},
+    {"action": "move", "card_id": "card-2", "column_id": "col-done"}
+  ]
 }
 
-Always be helpful, concise, and friendly. When you make changes, confirm what you did."""
+IMPORTANT: Always use the exact column IDs listed in the COLUMNS section above. Do not use hardcoded IDs like col-1, col-2, etc.
+
+Always be helpful, concise, and friendly. Provide insights when relevant.
+"""
+    
+    return prompt
 
 def get_conversation_history(username: str) -> List[Dict[str, str]]:
     if username not in conversation_history:
@@ -94,15 +129,28 @@ def add_to_history(username: str, role: str, content: str):
         history.pop(0)
 
 def build_board_context(board_data: Dict) -> str:
+    """Build detailed board context including all card information."""
     context = "Current board state:\n"
     context += f"Board: {board_data.get('title', 'Kanban Studio')}\n\n"
     
+    total_cards = sum(len(col['cardIds']) for col in board_data.get('columns', []))
+    context += f"Total cards: {total_cards}\n\n"
+    
     for column in board_data.get('columns', []):
-        context += f"{column['title']} ({column['id']}): {len(column['cardIds'])} cards\n"
+        context += f"## {column['title']} ({column['id']})\n"
+        context += f"Cards: {len(column['cardIds'])}\n\n"
+        
         for card_id in column['cardIds']:
             card = board_data['cards'].get(card_id)
             if card:
-                context += f"  - {card['id']}: {card['title']}\n"
+                context += f"### {card['id']}: {card['title']}\n"
+                if card.get('details'):
+                    # Truncate details if too long
+                    details = card['details']
+                    if len(details) > 200:
+                        details = details[:200] + "..."
+                    context += f"Details: {details}\n"
+                context += "\n"
     
     return context
 
@@ -125,14 +173,61 @@ def parse_ai_response(ai_text: str) -> AIResponse:
             board_updates=None
         )
 
+def validate_board_update(update: BoardUpdate, board_data: Dict) -> tuple[bool, str]:
+    """Validate a board update before applying it.
+    
+    Returns: (is_valid, error_message)
+    """
+    # Validate action type
+    valid_actions = ["create", "update", "move", "delete"]
+    if update.action not in valid_actions:
+        return False, f"Invalid action: {update.action}"
+    
+    # Validate column_id exists
+    if update.column_id:
+        valid_column_ids = [col['id'] for col in board_data.get('columns', [])]
+        if update.column_id not in valid_column_ids:
+            return False, f"Invalid column_id: {update.column_id}. Valid IDs: {valid_column_ids}"
+    
+    # Validate card_id exists (for update, move, delete)
+    if update.action in ["update", "move", "delete"]:
+        if not update.card_id:
+            return False, f"Missing card_id for {update.action} action"
+        
+        if update.card_id not in board_data.get('cards', {}):
+            return False, f"Card not found: {update.card_id}"
+    
+    # Validate data for create/update
+    if update.action in ["create", "update"]:
+        if not update.data:
+            return False, f"Missing data for {update.action} action"
+        
+        if update.action == "create" and not update.data.get('title'):
+            return False, "Missing title for create action"
+    
+    # Validate column_id required for create and move
+    if update.action in ["create", "move"]:
+        if not update.column_id:
+            return False, f"Missing column_id for {update.action} action"
+    
+    return True, ""
+
+
 def apply_board_updates(
     db: Session,
     username: str,
-    updates: List[BoardUpdate]
+    updates: List[BoardUpdate],
+    board_data: Dict
 ) -> List[str]:
     results = []
     
     for update in updates:
+        # Validate before applying
+        is_valid, error_msg = validate_board_update(update, board_data)
+        if not is_valid:
+            results.append(f"Validation failed: {error_msg}")
+            continue
+        
         try:
             if update.action == "create":
                 if not update.column_id or not update.data:
@@ -198,12 +293,16 @@ def chat_with_ai(
         else:
             board_data = {"columns": [], "cards": {}}
     
+    # Build dynamic system prompt with actual column IDs
+    system_prompt = build_system_prompt(board_data)
+    
+    # Build detailed board context with full card information
     board_context = build_board_context(board_data)
     
     history = get_conversation_history(username)
     
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "system", "content": board_context}
     ]
     
@@ -213,7 +312,7 @@ def chat_with_ai(
     
     try:
         ai_text = ai_client.simple_query(
-            f"{SYSTEM_PROMPT}\n\n{board_context}\n\nUser: {user_message}\n\nRespond with JSON:"
+            f"{system_prompt}\n\n{board_context}\n\nUser: {user_message}\n\nRespond with JSON:"
         )
         
         ai_response = parse_ai_response(ai_text)
@@ -223,7 +322,8 @@ def chat_with_ai(
         
         update_results = []
         if ai_response.board_updates:
-            update_results = apply_board_updates(db, username, ai_response.board_updates)
+            # Apply updates with validation
+            update_results = apply_board_updates(db, username, ai_response.board_updates, board_data)
         
         return {
             "response": ai_response.response,

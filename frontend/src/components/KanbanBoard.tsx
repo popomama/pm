@@ -7,14 +7,19 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  closestCorners,
+  closestCenter,
+  rectIntersection,
   type DragEndEvent,
   type DragStartEvent,
+  type CollisionDetection,
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
 import { ChatSidebar } from "@/components/ChatSidebar";
-import { createId, moveCard, type BoardData } from "@/lib/kanban";
+import { CardEditModal } from "@/components/CardEditModal";
+import { SearchBar } from "@/components/SearchBar";
+import { createId, moveCard, type BoardData, type Card } from "@/lib/kanban";
+import { useSearch } from "@/hooks/useSearch";
 import * as api from "@/lib/api";
 
 export const KanbanBoard = () => {
@@ -23,6 +28,31 @@ export const KanbanBoard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [editingCard, setEditingCard] = useState<Card | null>(null);
+
+  // Search and filter functionality
+  const {
+    searchQuery,
+    filterColumn,
+    setSearchQuery,
+    setFilterColumn,
+    isCardVisible,
+    matchCount,
+    hasActiveFilters,
+  } = useSearch(board);
+
+  // Custom collision detection that works better with empty containers
+  const customCollisionDetection: CollisionDetection = (args) => {
+    // First, try to find intersecting droppable areas
+    const rectIntersectionCollisions = rectIntersection(args);
+    
+    if (rectIntersectionCollisions.length > 0) {
+      return rectIntersectionCollisions;
+    }
+    
+    // If no intersections, use closest center (works better than closestCorners for empty containers)
+    return closestCenter(args);
+  };
 
   const loadBoard = async () => {
     try {
@@ -167,6 +197,44 @@ export const KanbanBoard = () => {
     }
   };
 
+  const handleEditCard = (cardId: string) => {
+    if (!board) return;
+    const card = board.cards[cardId];
+    if (card) {
+      setEditingCard(card);
+    }
+  };
+
+  const handleUpdateCard = async (cardId: string, title: string, details: string) => {
+    if (!board) return;
+
+    const oldCard = board.cards[cardId];
+    
+    // Optimistic update
+    setBoard({
+      ...board,
+      cards: {
+        ...board.cards,
+        [cardId]: { ...board.cards[cardId], title, details },
+      },
+    });
+
+    try {
+      await api.updateCard(cardId, title, details);
+    } catch (err) {
+      console.error('Failed to update card:', err);
+      // Rollback on error
+      setBoard({
+        ...board,
+        cards: {
+          ...board.cards,
+          [cardId]: oldCard,
+        },
+      });
+      throw err; // Re-throw to show error in modal
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -251,6 +319,17 @@ export const KanbanBoard = () => {
               </button>
             </div>
           </div>
+          
+          <SearchBar
+            searchQuery={searchQuery}
+            filterColumn={filterColumn}
+            onSearchChange={setSearchQuery}
+            onFilterChange={setFilterColumn}
+            columns={board.columns}
+            matchCount={matchCount}
+            hasActiveFilters={hasActiveFilters}
+          />
+
           <div className="flex flex-wrap items-center gap-4">
             {board.columns.map((column) => (
               <div
@@ -266,21 +345,28 @@ export const KanbanBoard = () => {
 
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCorners}
+          collisionDetection={customCollisionDetection}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
           <section className="grid gap-6 lg:grid-cols-5">
-            {board.columns.map((column) => (
-              <KanbanColumn
-                key={column.id}
-                column={column}
-                cards={column.cardIds.map((cardId) => board.cards[cardId])}
-                onRename={handleRenameColumn}
-                onAddCard={handleAddCard}
-                onDeleteCard={handleDeleteCard}
-              />
-            ))}
+            {board.columns.map((column) => {
+              const allCards = column.cardIds.map((cardId) => board.cards[cardId]);
+              const visibleCards = allCards.filter((card) => isCardVisible(card, column.id));
+              
+              return (
+                <KanbanColumn
+                  key={column.id}
+                  column={column}
+                  cards={visibleCards}
+                  onRename={handleRenameColumn}
+                  onAddCard={handleAddCard}
+                  onDeleteCard={handleDeleteCard}
+                  onEditCard={handleEditCard}
+                  searchQuery={searchQuery}
+                />
+              );
+            })}
           </section>
           <DragOverlay>
             {activeCard ? (
@@ -297,6 +383,15 @@ export const KanbanBoard = () => {
         onClose={() => setIsChatOpen(false)}
         onBoardUpdate={refreshBoard}
       />
+
+      {editingCard && (
+        <CardEditModal
+          card={editingCard}
+          isOpen={true}
+          onClose={() => setEditingCard(null)}
+          onSave={handleUpdateCard}
+        />
+      )}
     </div>
   );
 };
