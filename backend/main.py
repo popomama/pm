@@ -1,11 +1,12 @@
-from fastapi import FastAPI, HTTPException, Cookie, Depends
+from fastapi import FastAPI, HTTPException, Cookie, Depends, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel
 from typing import Optional
 import os
-from auth import create_session, validate_session, delete_session, verify_credentials
+import asyncio
+from auth import create_session, validate_session, delete_session, verify_credentials, cleanup_expired_sessions
 from database import init_db, get_db, SessionLocal
 from sqlalchemy.orm import Session
 from api_models import (
@@ -24,9 +25,22 @@ import ai_service
 
 app = FastAPI(title="Kanban Studio API")
 
+async def periodic_session_cleanup():
+    """Background task to clean up expired sessions every hour."""
+    while True:
+        await asyncio.sleep(3600)  # Run every hour
+        try:
+            count = cleanup_expired_sessions()
+            if count > 0:
+                print(f"Cleaned up {count} expired sessions")
+        except Exception as e:
+            print(f"Error cleaning up sessions: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    # Start background task for session cleanup
+    asyncio.create_task(periodic_session_cleanup())
 
 frontend_dir = Path(__file__).parent.parent / "frontend" / "out"
 

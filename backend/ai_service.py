@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import ai_client
 from board_service import create_card, update_card, delete_card, move_card, get_user_board
+from database import User, ChatMessage
 
 class BoardUpdate(BaseModel):
     action: str
@@ -15,8 +16,6 @@ class BoardUpdate(BaseModel):
 class AIResponse(BaseModel):
     response: str
     board_updates: Optional[List[BoardUpdate]] = None
-
-conversation_history: Dict[str, List[Dict[str, str]]] = {}
 
 def build_system_prompt(board_data: Dict) -> str:
     """Build system prompt with actual column IDs from the board."""
@@ -117,16 +116,36 @@ Always be helpful, concise, and friendly. Provide insights when relevant.
     
     return prompt
 
-def get_conversation_history(username: str) -> List[Dict[str, str]]:
-    if username not in conversation_history:
-        conversation_history[username] = []
-    return conversation_history[username]
+def get_conversation_history(db: Session, username: str, limit: int = 20) -> List[Dict[str, str]]:
+    """Load conversation history from database."""
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        return []
+    
+    messages = db.query(ChatMessage)\
+        .filter(ChatMessage.user_id == user.id)\
+        .order_by(ChatMessage.created_at.desc())\
+        .limit(limit)\
+        .all()
+    
+    # Reverse to get chronological order
+    messages = list(reversed(messages))
+    
+    return [{"role": msg.role, "content": msg.content} for msg in messages]
 
-def add_to_history(username: str, role: str, content: str):
-    history = get_conversation_history(username)
-    history.append({"role": role, "content": content})
-    if len(history) > 20:
-        history.pop(0)
+def add_to_history(db: Session, username: str, role: str, content: str):
+    """Save message to database."""
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        return
+    
+    message = ChatMessage(
+        user_id=user.id,
+        role=role,
+        content=content
+    )
+    db.add(message)
+    db.commit()
 
 def build_board_context(board_data: Dict) -> str:
     """Build detailed board context including all card information."""
@@ -299,14 +318,14 @@ def chat_with_ai(
     # Build detailed board context with full card information
     board_context = build_board_context(board_data)
     
-    history = get_conversation_history(username)
+    history = get_conversation_history(db, username, limit=10)
     
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "system", "content": board_context}
     ]
     
-    messages.extend(history[-10:])
+    messages.extend(history)
     
     messages.append({"role": "user", "content": user_message})
     
@@ -317,8 +336,8 @@ def chat_with_ai(
         
         ai_response = parse_ai_response(ai_text)
         
-        add_to_history(username, "user", user_message)
-        add_to_history(username, "assistant", ai_response.response)
+        add_to_history(db, username, "user", user_message)
+        add_to_history(db, username, "assistant", ai_response.response)
         
         update_results = []
         if ai_response.board_updates:

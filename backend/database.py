@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, String, Text, ForeignKey, DateTime, Unique
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship, Mapped, mapped_column
 from datetime import datetime
 from pathlib import Path
-import hashlib
+import bcrypt
 from typing import List
 
 class Base(DeclarativeBase):
@@ -68,6 +68,32 @@ class Card(Base):
         Index('ix_column_position', 'column_id', 'position'),
     )
 
+class Session(Base):
+    __tablename__ = 'sessions'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    token: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    
+    user: Mapped["User"] = relationship()
+
+class ChatMessage(Base):
+    __tablename__ = 'chat_messages'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String, nullable=False)  # 'user' or 'assistant'
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    user: Mapped["User"] = relationship()
+    
+    __table_args__ = (
+        Index('ix_user_created', 'user_id', 'created_at'),
+    )
+
 db_path = Path(__file__).parent.parent / "data" / "kanban.db"
 db_path.parent.mkdir(exist_ok=True)
 
@@ -81,7 +107,8 @@ def init_db():
     try:
         existing_user = db.query(User).filter(User.username == "user").first()
         if not existing_user:
-            password_hash = hashlib.sha256("password".encode()).hexdigest()
+            # Use bcrypt for secure password hashing
+            password_hash = bcrypt.hashpw("password".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
             user = User(username="user", password_hash=password_hash)
             db.add(user)
             db.commit()
@@ -131,3 +158,11 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def hash_password(password: str) -> str:
+    """Hash a password using bcrypt with automatic salt generation."""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its bcrypt hash."""
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
