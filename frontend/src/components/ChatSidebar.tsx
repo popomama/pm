@@ -18,6 +18,7 @@ export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate }: ChatSidebarProps
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -34,6 +35,25 @@ export const ChatSidebar = ({ isOpen, onClose, onBoardUpdate }: ChatSidebarProps
       inputRef.current.focus();
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    const loadChatHistory = async () => {
+      if (isOpen && !historyLoaded) {
+        try {
+          const response = await api.getChatHistory();
+          if (response.messages && response.messages.length > 0) {
+            setMessages(response.messages);
+          }
+          setHistoryLoaded(true);
+        } catch (error) {
+          console.error("Failed to load chat history:", error);
+          setHistoryLoaded(true);
+        }
+      }
+    };
+
+    loadChatHistory();
+  }, [isOpen, historyLoaded]);
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;

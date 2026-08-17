@@ -65,6 +65,12 @@ export async function renameColumn(columnId: string, title: string): Promise<voi
   });
 }
 
+export async function getChatHistory(): Promise<{
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+}> {
+  return fetchApi('/api/ai/chat/history');
+}
+
 export async function chatWithAI(message: string): Promise<{
   response: string;
   board_updates: any[];

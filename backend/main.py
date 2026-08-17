@@ -409,6 +409,18 @@ class ChatRequest(BaseModel):
     message: str
     board: Optional[dict] = None
 
+@app.get("/api/ai/chat/history")
+async def get_chat_history(
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get chat history for the current user."""
+    try:
+        history = ai_service.get_conversation_history(db, username, limit=50)
+        return {"messages": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load chat history: {str(e)}")
+
 @app.post("/api/ai/chat")
 async def chat_with_ai_endpoint(
     request: ChatRequest,
