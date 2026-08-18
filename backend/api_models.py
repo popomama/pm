@@ -23,6 +23,7 @@ class ColumnResponse(BaseModel):
     title: str
     position: int
     cardIds: List[str]
+    wipLimit: Optional[int] = None
 
 class BoardResponse(BaseModel):
     id: int
@@ -48,6 +49,18 @@ class MoveCardRequest(BaseModel):
 
 class RenameColumnRequest(BaseModel):
     title: str
+
+class CreateColumnRequest(BaseModel):
+    title: str
+    position: Optional[int] = None
+    wipLimit: Optional[int] = None
+
+class UpdateColumnRequest(BaseModel):
+    title: Optional[str] = None
+    wipLimit: Optional[int] = None
+
+class ReorderColumnsRequest(BaseModel):
+    columnOrder: List[str]  # List of column IDs in new order
 
 class UpdateBoardRequest(BaseModel):
     columns: List[ColumnResponse]

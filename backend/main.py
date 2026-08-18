@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from api_models import (
     BoardResponse, CreateCardRequest, UpdateCardRequest, 
     MoveCardRequest, RenameColumnRequest, UpdateBoardRequest,
-    CreateChecklistItemRequest, UpdateChecklistItemRequest
+    CreateChecklistItemRequest, UpdateChecklistItemRequest,
+    CreateColumnRequest, UpdateColumnRequest, ReorderColumnsRequest
 )
 from board_service import (
     get_user_board,
@@ -586,6 +587,159 @@ async def rename_existing_column(
     success = rename_column(db, username, column_id, request.title)
     if not success:
         raise HTTPException(status_code=404, detail="Column not found")
+    return {"success": True}
+
+# Column management endpoints
+@app.post("/api/boards/{board_id}/columns")
+async def create_column(
+    board_id: int,
+    request: CreateColumnRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new column in a board."""
+    from database import User, Board, Column
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    # Get next position if not specified
+    if request.position is None:
+        max_pos = db.query(Column).filter(Column.board_id == board_id).count()
+        position = max_pos
+    else:
+        position = request.position
+        # Shift existing columns
+        db.query(Column).filter(
+            Column.board_id == board_id,
+            Column.position >= position
+        ).update({Column.position: Column.position + 1})
+    
+    column = Column(
+        board_id=board_id,
+        title=request.title,
+        position=position,
+        wip_limit=request.wipLimit
+    )
+    db.add(column)
+    db.commit()
+    db.refresh(column)
+    
+    return {
+        "id": f"col-{column.id}",
+        "title": column.title,
+        "position": column.position,
+        "wipLimit": column.wip_limit
+    }
+
+@app.put("/api/columns/{column_id}/update")
+async def update_column(
+    column_id: str,
+    request: UpdateColumnRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update column title and/or WIP limit."""
+    from database import User, Column
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    col_id = int(column_id.replace("col-", ""))
+    column = db.query(Column).filter(Column.id == col_id).first()
+    if not column or column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Column not found")
+    
+    if request.title is not None:
+        column.title = request.title
+    if request.wipLimit is not None:
+        column.wip_limit = request.wipLimit if request.wipLimit > 0 else None
+    
+    db.commit()
+    return {"success": True}
+
+@app.delete("/api/columns/{column_id}")
+async def delete_column(
+    column_id: str,
+    migrate_to_column_id: Optional[str] = None,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a column and optionally migrate cards to another column."""
+    from database import User, Column, Card
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    col_id = int(column_id.replace("col-", ""))
+    column = db.query(Column).filter(Column.id == col_id).first()
+    if not column or column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Column not found")
+    
+    board_id = column.board_id
+    position = column.position
+    
+    # Migrate cards if target column specified
+    if migrate_to_column_id:
+        target_col_id = int(migrate_to_column_id.replace("col-", ""))
+        target_column = db.query(Column).filter(Column.id == target_col_id).first()
+        if not target_column or target_column.board_id != board_id:
+            raise HTTPException(status_code=400, detail="Invalid target column")
+        
+        # Move all cards to target column
+        cards = db.query(Card).filter(Card.column_id == col_id).all()
+        max_pos = db.query(Card).filter(Card.column_id == target_col_id).count()
+        for i, card in enumerate(cards):
+            card.column_id = target_col_id
+            card.position = max_pos + i
+    
+    # Delete column (cards will cascade delete if not migrated)
+    db.delete(column)
+    
+    # Shift remaining columns
+    db.query(Column).filter(
+        Column.board_id == board_id,
+        Column.position > position
+    ).update({Column.position: Column.position - 1})
+    
+    db.commit()
+    return {"success": True}
+
+@app.post("/api/boards/{board_id}/columns/reorder")
+async def reorder_columns(
+    board_id: int,
+    request: ReorderColumnsRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Reorder columns in a board."""
+    from database import User, Board, Column
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    # First, set all positions to negative values to avoid unique constraint violations
+    columns = db.query(Column).filter(Column.board_id == board_id).all()
+    for col in columns:
+        col.position = -col.id  # Use negative ID as temporary position
+    db.flush()
+    
+    # Now update to final positions
+    for i, column_id in enumerate(request.columnOrder):
+        col_id = int(column_id.replace("col-", ""))
+        column = db.query(Column).filter(Column.id == col_id, Column.board_id == board_id).first()
+        if column:
+            column.position = i
+    
+    db.commit()
     return {"success": True}
 
 # Checklist endpoints

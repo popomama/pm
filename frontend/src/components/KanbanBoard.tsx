@@ -13,6 +13,8 @@ import {
   type DragStartEvent,
   type CollisionDetection,
 } from "@dnd-kit/core";
+import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
 import { ChatSidebar } from "@/components/ChatSidebar";
@@ -24,7 +26,10 @@ import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import { BoardSwitcher } from "@/components/BoardSwitcher";
 import { CreateBoardModal } from "@/components/CreateBoardModal";
 import { ManageBoardsModal } from "@/components/ManageBoardsModal";
-import { createId, moveCard, type BoardData, type Card } from "@/lib/kanban";
+import { AddColumnModal } from "@/components/AddColumnModal";
+import { ColumnSettingsModal } from "@/components/ColumnSettingsModal";
+import { SortableColumn } from "@/components/SortableColumn";
+import { createId, moveCard, type BoardData, type Card, type Column } from "@/lib/kanban";
 import { useSearch } from "@/hooks/useSearch";
 import { useActionHistory } from "@/hooks/useActionHistory";
 import { useKeyboardShortcuts, type KeyboardShortcut, SHORTCUT_CATEGORIES } from "@/hooks/useKeyboardShortcuts";
@@ -49,6 +54,8 @@ export const KanbanBoard = () => {
   const [editingCard, setEditingCard] = useState<Card | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isShortcutsHelpOpen, setIsShortcutsHelpOpen] = useState(false);
+  const [isAddColumnModalOpen, setIsAddColumnModalOpen] = useState(false);
+  const [editingColumn, setEditingColumn] = useState<Column | null>(null);
   const [isCreateBoardOpen, setIsCreateBoardOpen] = useState(false);
   const [isManageBoardsOpen, setIsManageBoardsOpen] = useState(false);
   const [focusedColumnIndex, setFocusedColumnIndex] = useState<number | null>(null);
@@ -195,19 +202,90 @@ export const KanbanBoard = () => {
   const cardsById = useMemo(() => board?.cards || {}, [board?.cards]);
 
   const handleDragStart = (event: DragStartEvent) => {
-    setActiveCardId(event.active.id as string);
+    const activeId = event.active.id as string;
+    setActiveCardId(activeId);
+    
+    // Debug log
+    const isColumn = board?.columns.some(col => col.id === activeId);
+    console.log('Drag start:', { activeId, isColumn });
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveCardId(null);
 
-    if (!over || active.id === over.id || !board) {
+    if (!over || !board) {
+      console.log('Drag end: no over or board');
       return;
     }
 
-    const cardId = active.id as string;
-    const targetId = over.id as string;
+    const activeId = active.id as string;
+    const overId = over.id as string;
+
+    // Check if we're dragging a column
+    const isColumnDrag = board.columns.some(col => col.id === activeId);
+    
+    console.log('Drag end:', { activeId, overId, isColumnDrag });
+    
+    if (isColumnDrag) {
+      // Find which column we're over (could be the column itself or a card/element inside it)
+      let targetColumnId = overId;
+      
+      // If we're over a card, find its column
+      const overColumn = board.columns.find(col => col.id === overId);
+      if (!overColumn) {
+        // We're over a card, find which column it belongs to
+        const columnWithCard = board.columns.find(col => col.cardIds.includes(overId));
+        if (columnWithCard) {
+          targetColumnId = columnWithCard.id;
+        }
+      }
+      
+      console.log('Column reorder:', { activeId, targetColumnId });
+      
+      // Handle column reordering
+      const oldIndex = board.columns.findIndex(col => col.id === activeId);
+      const newIndex = board.columns.findIndex(col => col.id === targetColumnId);
+      
+      console.log('Indices:', { oldIndex, newIndex });
+      
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        const newColumns = [...board.columns];
+        const [movedColumn] = newColumns.splice(oldIndex, 1);
+        newColumns.splice(newIndex, 0, movedColumn);
+        
+        // Update positions
+        const updatedColumns = newColumns.map((col, index) => ({
+          ...col,
+          position: index
+        }));
+        
+        console.log('Setting new column order:', updatedColumns.map(c => c.id));
+        
+        setBoard({
+          ...board,
+          columns: updatedColumns,
+        });
+        
+        try {
+          await api.reorderColumns(board.id, updatedColumns.map(col => col.id));
+          console.log('Column reorder saved successfully');
+        } catch (err) {
+          console.error('Failed to reorder columns:', err);
+          // Rollback on error
+          await refreshBoard();
+        }
+      }
+      return;
+    }
+
+    if (active.id === over.id) {
+      return;
+    }
+
+    // Handle card dragging (existing logic)
+    const cardId = activeId;
+    const targetId = overId;
     
     // Find source column and position
     const sourceColumn = board.columns.find(col => col.cardIds.includes(cardId));
@@ -443,6 +521,46 @@ export const KanbanBoard = () => {
     }
   };
 
+  const handleAddColumn = async (title: string, wipLimit: number | null) => {
+    if (!board) return;
+    
+    try {
+      await api.createColumn(board.id, title, undefined, wipLimit || undefined);
+      await refreshBoard();
+    } catch (err) {
+      console.error('Failed to add column:', err);
+      throw err;
+    }
+  };
+
+  const handleUpdateColumn = async (columnId: string, title: string, wipLimit: number | null) => {
+    try {
+      await api.updateColumn(columnId, title, wipLimit);
+      await refreshBoard();
+    } catch (err) {
+      console.error('Failed to update column:', err);
+      throw err;
+    }
+  };
+
+  const handleDeleteColumn = async (columnId: string, migrateToColumnId?: string) => {
+    try {
+      await api.deleteColumn(columnId, migrateToColumnId);
+      await refreshBoard();
+    } catch (err) {
+      console.error('Failed to delete column:', err);
+      throw err;
+    }
+  };
+
+  const handleColumnSettings = (columnId: string) => {
+    if (!board) return;
+    const column = board.columns.find(col => col.id === columnId);
+    if (column) {
+      setEditingColumn(column);
+    }
+  };
+
   const handleDeleteBoard = async (boardId: number) => {
     try {
       await api.deleteBoard(boardId);
@@ -523,6 +641,12 @@ export const KanbanBoard = () => {
                 lastAction={lastAction}
               />
               <button
+                onClick={() => setIsAddColumnModalOpen(true)}
+                className="rounded-2xl border border-[var(--stroke)] bg-white px-5 py-4 text-sm font-semibold text-[var(--navy-dark)] transition hover:bg-[var(--surface)]"
+              >
+                + Add Column
+              </button>
+              <button
                 onClick={() => setIsChatOpen(true)}
                 className="rounded-2xl border border-[var(--stroke)] bg-gradient-to-r from-[var(--primary-blue)] to-[var(--secondary-purple)] px-5 py-4 text-sm font-semibold text-white transition hover:opacity-90"
               >
@@ -566,32 +690,29 @@ export const KanbanBoard = () => {
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <section className="grid gap-6 lg:grid-cols-5">
-            {board.columns.map((column, index) => {
-              const allCards = column.cardIds.map((cardId) => board.cards[cardId]);
-              const visibleCards = allCards.filter((card) => isCardVisible(card, column.id));
-              
-              return (
-                <div
-                  key={column.id}
-                  data-column-index={index}
-                  className={`transition-all duration-300 ${
-                    focusedColumnIndex === index ? 'ring-2 ring-[var(--primary-blue)] rounded-3xl' : ''
-                  }`}
-                >
-                  <KanbanColumn
+          <SortableContext items={board.columns.map(col => col.id)} strategy={horizontalListSortingStrategy}>
+            <section className="grid gap-6 lg:grid-cols-5">
+              {board.columns.map((column, index) => {
+                const allCards = column.cardIds.map((cardId) => board.cards[cardId]);
+                const visibleCards = allCards.filter((card) => isCardVisible(card, column.id));
+                
+                return (
+                  <SortableColumn
+                    key={column.id}
                     column={column}
                     cards={visibleCards}
                     onRename={handleRenameColumn}
                     onAddCard={handleAddCard}
                     onDeleteCard={handleDeleteCard}
                     onEditCard={handleEditCard}
+                    onColumnSettings={handleColumnSettings}
                     searchQuery={searchQuery}
+                    isFocused={focusedColumnIndex === index}
                   />
-                </div>
-              );
-            })}
-          </section>
+                );
+              })}
+            </section>
+          </SortableContext>
           <DragOverlay>
             {activeCard ? (
               <div className="w-[260px]">
@@ -643,6 +764,21 @@ export const KanbanBoard = () => {
         onArchive={handleArchiveBoard}
         onDuplicate={handleDuplicateBoard}
         onDelete={handleDeleteBoard}
+      />
+
+      <AddColumnModal
+        isOpen={isAddColumnModalOpen}
+        onClose={() => setIsAddColumnModalOpen(false)}
+        onAdd={handleAddColumn}
+      />
+
+      <ColumnSettingsModal
+        column={editingColumn}
+        allColumns={board?.columns || []}
+        isOpen={!!editingColumn}
+        onClose={() => setEditingColumn(null)}
+        onUpdate={handleUpdateColumn}
+        onDelete={handleDeleteColumn}
       />
     </div>
   );

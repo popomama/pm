@@ -69,7 +69,8 @@ def get_user_board(db: Session, username: str, board_id: Optional[int] = None) -
             id=f"col-{col.id}",
             title=col.title,
             position=col.position,
-            cardIds=card_ids
+            cardIds=card_ids,
+            wipLimit=col.wip_limit
         ))
     
     return BoardResponse(

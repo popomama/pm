@@ -158,3 +158,49 @@ export async function deleteChecklistItem(cardId: string, itemId: number): Promi
     method: 'DELETE',
   });
 }
+
+// Column management API functions
+export async function createColumn(
+  boardId: number,
+  title: string,
+  position?: number,
+  wipLimit?: number
+): Promise<{ id: string; title: string; position: number; wipLimit: number | null }> {
+  return fetchApi(`/api/boards/${boardId}/columns`, {
+    method: 'POST',
+    body: JSON.stringify({ title, position, wipLimit }),
+  });
+}
+
+export async function updateColumn(
+  columnId: string,
+  title?: string,
+  wipLimit?: number | null
+): Promise<void> {
+  await fetchApi(`/api/columns/${columnId}/update`, {
+    method: 'PUT',
+    body: JSON.stringify({ title, wipLimit }),
+  });
+}
+
+export async function deleteColumn(
+  columnId: string,
+  migrateToColumnId?: string
+): Promise<void> {
+  const url = migrateToColumnId
+    ? `/api/columns/${columnId}?migrate_to_column_id=${migrateToColumnId}`
+    : `/api/columns/${columnId}`;
+  await fetchApi(url, {
+    method: 'DELETE',
+  });
+}
+
+export async function reorderColumns(
+  boardId: number,
+  columnOrder: string[]
+): Promise<void> {
+  await fetchApi(`/api/boards/${boardId}/columns/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ columnOrder }),
+  });
+}

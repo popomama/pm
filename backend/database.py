@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, String, Text, ForeignKey, DateTime, UniqueConstraint, Index
+from sqlalchemy import create_engine, String, Text, ForeignKey, DateTime, UniqueConstraint, Index, Integer
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship, Mapped, mapped_column
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +43,7 @@ class Column(Base):
     board_id: Mapped[int] = mapped_column(ForeignKey('boards.id'), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
     position: Mapped[int] = mapped_column(nullable=False)
+    wip_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Work In Progress limit
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     
     board: Mapped["Board"] = relationship(back_populates="columns")
