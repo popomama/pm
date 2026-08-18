@@ -19,9 +19,16 @@ import { ChatSidebar } from "@/components/ChatSidebar";
 import { CardEditModal } from "@/components/CardEditModal";
 import { SearchBar } from "@/components/SearchBar";
 import { UndoRedoButtons } from "@/components/UndoRedoButtons";
+import { CommandPalette, type Command } from "@/components/CommandPalette";
+import { ShortcutsHelp } from "@/components/ShortcutsHelp";
+import { BoardSwitcher } from "@/components/BoardSwitcher";
+import { CreateBoardModal } from "@/components/CreateBoardModal";
+import { ManageBoardsModal } from "@/components/ManageBoardsModal";
 import { createId, moveCard, type BoardData, type Card } from "@/lib/kanban";
 import { useSearch } from "@/hooks/useSearch";
 import { useActionHistory } from "@/hooks/useActionHistory";
+import { useKeyboardShortcuts, type KeyboardShortcut, SHORTCUT_CATEGORIES } from "@/hooks/useKeyboardShortcuts";
+import type { BoardSummary } from "@/lib/api";
 import {
   createCardAction,
   deleteCardAction,
@@ -33,11 +40,18 @@ import * as api from "@/lib/api";
 
 export const KanbanBoard = () => {
   const [board, setBoard] = useState<BoardData | null>(null);
+  const [boards, setBoards] = useState<BoardSummary[]>([]);
+  const [currentBoardId, setCurrentBoardId] = useState<number | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<Card | null>(null);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isShortcutsHelpOpen, setIsShortcutsHelpOpen] = useState(false);
+  const [isCreateBoardOpen, setIsCreateBoardOpen] = useState(false);
+  const [isManageBoardsOpen, setIsManageBoardsOpen] = useState(false);
+  const [focusedColumnIndex, setFocusedColumnIndex] = useState<number | null>(null);
 
   // Search and filter functionality
   const {
@@ -73,11 +87,21 @@ export const KanbanBoard = () => {
     return closestCenter(args);
   };
 
-  const loadBoard = async () => {
+  const loadBoards = async () => {
+    try {
+      const data = await api.getBoards();
+      setBoards(data.boards);
+    } catch (err) {
+      console.error('Failed to load boards:', err);
+    }
+  };
+
+  const loadBoard = async (boardId?: number) => {
     try {
       setLoading(true);
-      const data = await api.getBoard();
+      const data = await api.getBoard(boardId);
       setBoard(data);
+      setCurrentBoardId(data.id);
       setError(null);
     } catch (err) {
       setError(err instanceof api.ApiError ? err.message : 'Failed to load board');
@@ -89,7 +113,7 @@ export const KanbanBoard = () => {
 
   const refreshBoard = async () => {
     try {
-      const data = await api.getBoard();
+      const data = await api.getBoard(currentBoardId || undefined);
       setBoard(data);
     } catch (err) {
       console.error('Failed to refresh board:', err);
@@ -97,8 +121,70 @@ export const KanbanBoard = () => {
   };
 
   useEffect(() => {
+    loadBoards();
     loadBoard();
   }, []);
+
+  // Helper function to scroll to a column
+  const scrollToColumn = (index: number) => {
+    const columns = document.querySelectorAll('[data-column-index]');
+    if (columns[index]) {
+      columns[index].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      setFocusedColumnIndex(index);
+      // Clear focus after a moment
+      setTimeout(() => setFocusedColumnIndex(null), 2000);
+    }
+  };
+
+  // Define keyboard shortcuts
+  const shortcuts: KeyboardShortcut[] = useMemo(() => [
+    // Navigation
+    { key: '1', description: 'Jump to column 1', action: () => scrollToColumn(0), category: SHORTCUT_CATEGORIES.NAVIGATION },
+    { key: '2', description: 'Jump to column 2', action: () => scrollToColumn(1), category: SHORTCUT_CATEGORIES.NAVIGATION },
+    { key: '3', description: 'Jump to column 3', action: () => scrollToColumn(2), category: SHORTCUT_CATEGORIES.NAVIGATION },
+    { key: '4', description: 'Jump to column 4', action: () => scrollToColumn(3), category: SHORTCUT_CATEGORIES.NAVIGATION },
+    { key: '5', description: 'Jump to column 5', action: () => scrollToColumn(4), category: SHORTCUT_CATEGORIES.NAVIGATION },
+    
+    // Search
+    { key: '/', description: 'Focus search', action: () => document.querySelector<HTMLInputElement>('input[placeholder*="Search"]')?.focus(), category: SHORTCUT_CATEGORIES.SEARCH },
+    
+    // Actions
+    { key: 'k', ctrl: true, description: 'Open command palette', action: () => setIsCommandPaletteOpen(true), category: SHORTCUT_CATEGORIES.ACTIONS },
+    { key: '?', shift: true, description: 'Show keyboard shortcuts', action: () => setIsShortcutsHelpOpen(true), category: SHORTCUT_CATEGORIES.GENERAL },
+    
+    // Undo/Redo (already implemented, just documenting)
+    { key: 'z', ctrl: true, description: 'Undo', action: undo, category: SHORTCUT_CATEGORIES.EDITING },
+    { key: 'y', ctrl: true, description: 'Redo', action: redo, category: SHORTCUT_CATEGORIES.EDITING },
+    { key: 'f', ctrl: true, description: 'Search cards', action: () => document.querySelector<HTMLInputElement>('input[placeholder*="Search"]')?.focus(), category: SHORTCUT_CATEGORIES.SEARCH },
+  ], [undo, redo]);
+
+  // Define commands for command palette
+  const commands: Command[] = useMemo(() => {
+    const cmds: Command[] = [
+      { id: 'search', label: 'Search cards', description: 'Find cards by title or details', action: () => document.querySelector<HTMLInputElement>('input[placeholder*="Search"]')?.focus(), category: 'Search' },
+      { id: 'undo', label: 'Undo', description: 'Undo last action', action: undo, category: 'Edit', keywords: ['undo', 'revert'] },
+      { id: 'redo', label: 'Redo', description: 'Redo last undone action', action: redo, category: 'Edit', keywords: ['redo', 'repeat'] },
+      { id: 'chat', label: 'Open AI Chat', description: 'Chat with AI assistant', action: () => setIsChatOpen(true), category: 'AI', keywords: ['ai', 'chat', 'assistant'] },
+      { id: 'shortcuts', label: 'Show Keyboard Shortcuts', description: 'View all available shortcuts', action: () => setIsShortcutsHelpOpen(true), category: 'Help', keywords: ['help', 'shortcuts', 'keys'] },
+    ];
+
+    // Add "Jump to column" commands
+    board?.columns.forEach((col, index) => {
+      cmds.push({
+        id: `jump-${col.id}`,
+        label: `Jump to ${col.title}`,
+        description: `Focus on ${col.title} column`,
+        action: () => scrollToColumn(index),
+        category: 'Navigation',
+        keywords: ['jump', 'column', col.title.toLowerCase()],
+      });
+    });
+
+    return cmds;
+  }, [board, undo, redo]);
+
+  // Enable keyboard shortcuts
+  useKeyboardShortcuts({ shortcuts, enabled: !isCommandPaletteOpen && !isShortcutsHelpOpen && !editingCard });
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -311,6 +397,54 @@ export const KanbanBoard = () => {
     }
   };
 
+  const handleSelectBoard = async (boardId: number) => {
+    await loadBoard(boardId);
+  };
+
+  const handleCreateBoard = async (title: string, templateName: string) => {
+    try {
+      const newBoard = await api.createBoard(title, templateName);
+      await loadBoards();
+      await loadBoard(newBoard.id);
+    } catch (err) {
+      console.error('Failed to create board:', err);
+    }
+  };
+
+  const handleArchiveBoard = async (boardId: number, archive: boolean) => {
+    try {
+      await api.archiveBoard(boardId, archive);
+      await loadBoards();
+      if (boardId === currentBoardId && archive) {
+        await loadBoard();
+      }
+    } catch (err) {
+      console.error('Failed to archive board:', err);
+    }
+  };
+
+  const handleDuplicateBoard = async (boardId: number, includeCards: boolean) => {
+    try {
+      const newBoard = await api.duplicateBoard(boardId, includeCards);
+      await loadBoards();
+      await loadBoard(newBoard.id);
+    } catch (err) {
+      console.error('Failed to duplicate board:', err);
+    }
+  };
+
+  const handleDeleteBoard = async (boardId: number) => {
+    try {
+      await api.deleteBoard(boardId);
+      await loadBoards();
+      if (boardId === currentBoardId) {
+        await loadBoard();
+      }
+    } catch (err) {
+      console.error('Failed to delete board:', err);
+    }
+  };
+
   const activeCard = activeCardId ? cardsById[activeCardId] : null;
 
   if (loading) {
@@ -364,6 +498,13 @@ export const KanbanBoard = () => {
               </p>
             </div>
             <div className="flex flex-wrap gap-4">
+              <BoardSwitcher
+                boards={boards}
+                currentBoardId={currentBoardId}
+                onSelectBoard={handleSelectBoard}
+                onCreateBoard={() => setIsCreateBoardOpen(true)}
+                onManageBoards={() => setIsManageBoardsOpen(true)}
+              />
               <UndoRedoButtons
                 canUndo={canUndo}
                 canRedo={canRedo}
@@ -371,14 +512,6 @@ export const KanbanBoard = () => {
                 onRedo={redo}
                 lastAction={lastAction}
               />
-              <div className="rounded-2xl border border-[var(--stroke)] bg-[var(--surface)] px-5 py-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--gray-text)]">
-                  Focus
-                </p>
-                <p className="mt-2 text-lg font-semibold text-[var(--primary-blue)]">
-                  One board. Five columns. Zero clutter.
-                </p>
-              </div>
               <button
                 onClick={() => setIsChatOpen(true)}
                 className="rounded-2xl border border-[var(--stroke)] bg-gradient-to-r from-[var(--primary-blue)] to-[var(--secondary-purple)] px-5 py-4 text-sm font-semibold text-white transition hover:opacity-90"
@@ -424,21 +557,28 @@ export const KanbanBoard = () => {
           onDragEnd={handleDragEnd}
         >
           <section className="grid gap-6 lg:grid-cols-5">
-            {board.columns.map((column) => {
+            {board.columns.map((column, index) => {
               const allCards = column.cardIds.map((cardId) => board.cards[cardId]);
               const visibleCards = allCards.filter((card) => isCardVisible(card, column.id));
               
               return (
-                <KanbanColumn
+                <div
                   key={column.id}
-                  column={column}
-                  cards={visibleCards}
-                  onRename={handleRenameColumn}
-                  onAddCard={handleAddCard}
-                  onDeleteCard={handleDeleteCard}
-                  onEditCard={handleEditCard}
-                  searchQuery={searchQuery}
-                />
+                  data-column-index={index}
+                  className={`transition-all duration-300 ${
+                    focusedColumnIndex === index ? 'ring-2 ring-[var(--primary-blue)] rounded-3xl' : ''
+                  }`}
+                >
+                  <KanbanColumn
+                    column={column}
+                    cards={visibleCards}
+                    onRename={handleRenameColumn}
+                    onAddCard={handleAddCard}
+                    onDeleteCard={handleDeleteCard}
+                    onEditCard={handleEditCard}
+                    searchQuery={searchQuery}
+                  />
+                </div>
               );
             })}
           </section>
@@ -466,6 +606,34 @@ export const KanbanBoard = () => {
           onSave={handleUpdateCard}
         />
       )}
+
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        commands={commands}
+      />
+
+      <ShortcutsHelp
+        isOpen={isShortcutsHelpOpen}
+        onClose={() => setIsShortcutsHelpOpen(false)}
+        shortcuts={shortcuts}
+      />
+
+      <CreateBoardModal
+        isOpen={isCreateBoardOpen}
+        onClose={() => setIsCreateBoardOpen(false)}
+        onCreate={handleCreateBoard}
+      />
+
+      <ManageBoardsModal
+        isOpen={isManageBoardsOpen}
+        onClose={() => setIsManageBoardsOpen(false)}
+        boards={boards}
+        currentBoardId={currentBoardId}
+        onArchive={handleArchiveBoard}
+        onDuplicate={handleDuplicateBoard}
+        onDelete={handleDeleteBoard}
+      />
     </div>
   );
 };

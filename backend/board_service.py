@@ -3,12 +3,20 @@ from database import User, Board, Column, Card
 from api_models import BoardResponse, ColumnResponse, CardResponse
 from typing import Optional
 
-def get_user_board(db: Session, username: str) -> Optional[BoardResponse]:
+def get_user_board(db: Session, username: str, board_id: Optional[int] = None) -> Optional[BoardResponse]:
     user = db.query(User).filter(User.username == username).first()
     if not user:
         return None
     
-    board = db.query(Board).filter(Board.user_id == user.id).first()
+    if board_id:
+        board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    else:
+        # Get most recent non-archived board
+        board = db.query(Board).filter(
+            Board.user_id == user.id,
+            Board.is_archived == False
+        ).order_by(Board.updated_at.desc()).first()
+    
     if not board:
         return None
     

@@ -27,8 +27,47 @@ async function fetchApi<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json();
 }
 
-export async function getBoard(): Promise<BoardData> {
-  return fetchApi<BoardData>('/api/board');
+export interface BoardSummary {
+  id: number;
+  title: string;
+  is_archived: boolean;
+  template_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getBoards(includeArchived: boolean = false): Promise<{ boards: BoardSummary[] }> {
+  return fetchApi(`/api/boards?include_archived=${includeArchived}`);
+}
+
+export async function getBoard(boardId?: number): Promise<BoardData> {
+  const url = boardId ? `/api/board?board_id=${boardId}` : '/api/board';
+  return fetchApi<BoardData>(url);
+}
+
+export async function createBoard(title: string, templateName: string = 'default'): Promise<BoardSummary> {
+  return fetchApi('/api/boards', {
+    method: 'POST',
+    body: JSON.stringify({ title, template_name: templateName }),
+  });
+}
+
+export async function deleteBoard(boardId: number): Promise<void> {
+  await fetchApi(`/api/boards/${boardId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function archiveBoard(boardId: number, archive: boolean = true): Promise<void> {
+  await fetchApi(`/api/boards/${boardId}/archive?archive=${archive}`, {
+    method: 'PUT',
+  });
+}
+
+export async function duplicateBoard(boardId: number, includeCards: boolean = false): Promise<BoardSummary> {
+  return fetchApi(`/api/boards/${boardId}/duplicate?include_cards=${includeCards}`, {
+    method: 'POST',
+  });
 }
 
 export async function createCard(columnId: string, title: string, details: string): Promise<Card> {

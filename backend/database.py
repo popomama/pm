@@ -24,6 +24,8 @@ class Board(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
+    is_archived: Mapped[bool] = mapped_column(nullable=False, default=False)
+    template_name: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -31,7 +33,7 @@ class Board(Base):
     columns: Mapped[List["Column"]] = relationship(back_populates="board", cascade="all, delete-orphan", order_by="Column.position")
     
     __table_args__ = (
-        UniqueConstraint('user_id', name='uq_user_board'),
+        Index('ix_user_archived', 'user_id', 'is_archived'),
     )
 
 class Column(Base):
@@ -100,6 +102,39 @@ db_path.parent.mkdir(exist_ok=True)
 engine = create_engine(f'sqlite:///{db_path}', echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+def get_template_columns(template_name: str) -> list[tuple[str, int]]:
+    """Get column definitions for a board template."""
+    templates = {
+        'default': [
+            ('Backlog', 0),
+            ('To Do', 1),
+            ('In Progress', 2),
+            ('Review', 3),
+            ('Done', 4),
+        ],
+        'personal': [
+            ('Ideas', 0),
+            ('To Do', 1),
+            ('Doing', 2),
+            ('Done', 3),
+        ],
+        'sprint': [
+            ('Backlog', 0),
+            ('Sprint Planning', 1),
+            ('In Progress', 2),
+            ('Testing', 3),
+            ('Done', 4),
+        ],
+        'bug_tracker': [
+            ('New', 0),
+            ('Confirmed', 1),
+            ('In Progress', 2),
+            ('Testing', 3),
+            ('Closed', 4),
+        ],
+    }
+    return templates.get(template_name, templates['default'])
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     
@@ -114,15 +149,15 @@ def init_db():
             db.commit()
             db.refresh(user)
             
-            board = Board(user_id=user.id, title="Kanban Studio")
+            board = Board(user_id=user.id, title="Kanban Studio", template_name='default')
             db.add(board)
             db.commit()
             db.refresh(board)
             
-            column_titles = ["Backlog", "To Do", "In Progress", "Review", "Done"]
+            column_titles = get_template_columns('default')
             columns = []
-            for i, title in enumerate(column_titles):
-                col = Column(board_id=board.id, title=title, position=i)
+            for title, position in column_titles:
+                col = Column(board_id=board.id, title=title, position=position)
                 db.add(col)
                 columns.append(col)
             db.commit()

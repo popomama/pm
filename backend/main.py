@@ -323,15 +323,207 @@ async def check_session(session_token: str = Cookie(None)):
             status_code=401
         )
 
-@app.get("/api/board", response_model=BoardResponse)
-async def get_board(
+@app.get("/api/boards")
+async def get_boards(
+    include_archived: bool = False,
     username: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    board = get_user_board(db, username)
+    """Get all boards for the current user."""
+    from database import User, Board
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    query = db.query(Board).filter(Board.user_id == user.id)
+    if not include_archived:
+        query = query.filter(Board.is_archived == False)
+    
+    boards = query.order_by(Board.updated_at.desc()).all()
+    return {
+        "boards": [
+            {
+                "id": board.id,
+                "title": board.title,
+                "is_archived": board.is_archived,
+                "template_name": board.template_name,
+                "created_at": board.created_at.isoformat(),
+                "updated_at": board.updated_at.isoformat(),
+            }
+            for board in boards
+        ]
+    }
+
+@app.get("/api/board", response_model=BoardResponse)
+async def get_board(
+    board_id: Optional[int] = None,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific board or the user's most recent board."""
+    from database import User, Board
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if board_id:
+        board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    else:
+        # Get most recent non-archived board
+        board = db.query(Board).filter(
+            Board.user_id == user.id,
+            Board.is_archived == False
+        ).order_by(Board.updated_at.desc()).first()
+    
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")
-    return board
+    
+    # Convert to BoardResponse format
+    from board_service import get_user_board
+    return get_user_board(db, username, board.id)
+
+class CreateBoardRequest(BaseModel):
+    title: str
+    template_name: Optional[str] = 'default'
+
+@app.post("/api/boards")
+async def create_board(
+    request: CreateBoardRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new board for the current user."""
+    from database import User, Board, Column, get_template_columns
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Create board
+    board = Board(
+        user_id=user.id,
+        title=request.title,
+        template_name=request.template_name
+    )
+    db.add(board)
+    db.commit()
+    db.refresh(board)
+    
+    # Create columns from template
+    columns = get_template_columns(request.template_name or 'default')
+    for title, position in columns:
+        col = Column(board_id=board.id, title=title, position=position)
+        db.add(col)
+    db.commit()
+    
+    return {
+        "id": board.id,
+        "title": board.title,
+        "template_name": board.template_name,
+        "created_at": board.created_at.isoformat()
+    }
+
+@app.delete("/api/boards/{board_id}")
+async def delete_board(
+    board_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a board."""
+    from database import User, Board
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    db.delete(board)
+    db.commit()
+    return {"success": True}
+
+@app.put("/api/boards/{board_id}/archive")
+async def archive_board(
+    board_id: int,
+    archive: bool = True,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Archive or unarchive a board."""
+    from database import User, Board
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    board.is_archived = archive
+    db.commit()
+    return {"success": True, "is_archived": board.is_archived}
+
+@app.post("/api/boards/{board_id}/duplicate")
+async def duplicate_board(
+    board_id: int,
+    include_cards: bool = False,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Duplicate a board."""
+    from database import User, Board, Column, Card
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    original_board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not original_board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    # Create new board
+    new_board = Board(
+        user_id=user.id,
+        title=f"{original_board.title} (Copy)",
+        template_name=original_board.template_name
+    )
+    db.add(new_board)
+    db.commit()
+    db.refresh(new_board)
+    
+    # Copy columns
+    original_columns = db.query(Column).filter(Column.board_id == original_board.id).order_by(Column.position).all()
+    column_mapping = {}
+    
+    for orig_col in original_columns:
+        new_col = Column(
+            board_id=new_board.id,
+            title=orig_col.title,
+            position=orig_col.position
+        )
+        db.add(new_col)
+        db.commit()
+        db.refresh(new_col)
+        column_mapping[orig_col.id] = new_col.id
+    
+    # Copy cards if requested
+    if include_cards:
+        for orig_col in original_columns:
+            cards = db.query(Card).filter(Card.column_id == orig_col.id).order_by(Card.position).all()
+            for card in cards:
+                new_card = Card(
+                    column_id=column_mapping[orig_col.id],
+                    title=card.title,
+                    details=card.details,
+                    position=card.position
+                )
+                db.add(new_card)
+        db.commit()
+    
+    return {
+        "id": new_board.id,
+        "title": new_board.title,
+        "created_at": new_board.created_at.isoformat()
+    }
 
 @app.post("/api/cards")
 async def create_new_card(
