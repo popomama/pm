@@ -699,12 +699,22 @@ async def delete_column(
     
     # Delete column (cards will cascade delete if not migrated)
     db.delete(column)
+    db.flush()
     
-    # Shift remaining columns
-    db.query(Column).filter(
+    # Shift remaining columns - use two-step to avoid unique constraint violations
+    remaining_columns = db.query(Column).filter(
         Column.board_id == board_id,
         Column.position > position
-    ).update({Column.position: Column.position - 1})
+    ).order_by(Column.position).all()
+    
+    # First set to negative positions
+    for col in remaining_columns:
+        col.position = -col.id
+    db.flush()
+    
+    # Then set to final positions
+    for i, col in enumerate(remaining_columns):
+        col.position = position + i
     
     db.commit()
     return {"success": True}

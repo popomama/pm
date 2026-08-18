@@ -204,10 +204,6 @@ export const KanbanBoard = () => {
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = event.active.id as string;
     setActiveCardId(activeId);
-    
-    // Debug log
-    const isColumn = board?.columns.some(col => col.id === activeId);
-    console.log('Drag start:', { activeId, isColumn });
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -215,7 +211,6 @@ export const KanbanBoard = () => {
     setActiveCardId(null);
 
     if (!over || !board) {
-      console.log('Drag end: no over or board');
       return;
     }
 
@@ -224,8 +219,6 @@ export const KanbanBoard = () => {
 
     // Check if we're dragging a column
     const isColumnDrag = board.columns.some(col => col.id === activeId);
-    
-    console.log('Drag end:', { activeId, overId, isColumnDrag });
     
     if (isColumnDrag) {
       // Find which column we're over (could be the column itself or a card/element inside it)
@@ -241,13 +234,9 @@ export const KanbanBoard = () => {
         }
       }
       
-      console.log('Column reorder:', { activeId, targetColumnId });
-      
       // Handle column reordering
       const oldIndex = board.columns.findIndex(col => col.id === activeId);
       const newIndex = board.columns.findIndex(col => col.id === targetColumnId);
-      
-      console.log('Indices:', { oldIndex, newIndex });
       
       if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
         const newColumns = [...board.columns];
@@ -260,8 +249,6 @@ export const KanbanBoard = () => {
           position: index
         }));
         
-        console.log('Setting new column order:', updatedColumns.map(c => c.id));
-        
         setBoard({
           ...board,
           columns: updatedColumns,
@@ -269,7 +256,6 @@ export const KanbanBoard = () => {
         
         try {
           await api.reorderColumns(board.id, updatedColumns.map(col => col.id));
-          console.log('Column reorder saved successfully');
         } catch (err) {
           console.error('Failed to reorder columns:', err);
           // Rollback on error
