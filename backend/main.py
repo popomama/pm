@@ -11,7 +11,8 @@ from database import init_db, get_db, SessionLocal
 from sqlalchemy.orm import Session
 from api_models import (
     BoardResponse, CreateCardRequest, UpdateCardRequest, 
-    MoveCardRequest, RenameColumnRequest, UpdateBoardRequest
+    MoveCardRequest, RenameColumnRequest, UpdateBoardRequest,
+    CreateChecklistItemRequest, UpdateChecklistItemRequest
 )
 from board_service import (
     get_user_board,
@@ -543,7 +544,11 @@ async def update_existing_card(
     username: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    success = update_card_service(db, username, card_id, request.title, request.details)
+    success = update_card_service(
+        db, username, card_id, 
+        request.title, request.details,
+        request.dueDate, request.priority, request.tags
+    )
     if not success:
         raise HTTPException(status_code=404, detail="Card not found")
     return {"success": True}
@@ -581,6 +586,99 @@ async def rename_existing_column(
     success = rename_column(db, username, column_id, request.title)
     if not success:
         raise HTTPException(status_code=404, detail="Column not found")
+    return {"success": True}
+
+# Checklist endpoints
+@app.post("/api/cards/{card_id}/checklist")
+async def add_checklist_item(
+    card_id: str,
+    request: CreateChecklistItemRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from database import User, Card, ChecklistItem
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    # Get next position
+    max_pos = db.query(ChecklistItem).filter(ChecklistItem.card_id == c_id).count()
+    
+    item = ChecklistItem(
+        card_id=c_id,
+        text=request.text,
+        position=max_pos,
+        completed=False
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    
+    return {
+        "id": item.id,
+        "text": item.text,
+        "completed": item.completed,
+        "position": item.position
+    }
+
+@app.put("/api/cards/{card_id}/checklist/{item_id}")
+async def update_checklist_item(
+    card_id: str,
+    item_id: int,
+    request: UpdateChecklistItemRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from database import User, Card, ChecklistItem
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    item = db.query(ChecklistItem).filter(ChecklistItem.id == item_id, ChecklistItem.card_id == c_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Checklist item not found")
+    
+    if request.text is not None:
+        item.text = request.text
+    if request.completed is not None:
+        item.completed = request.completed
+    
+    db.commit()
+    return {"success": True}
+
+@app.delete("/api/cards/{card_id}/checklist/{item_id}")
+async def delete_checklist_item(
+    card_id: str,
+    item_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from database import User, Card, ChecklistItem
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    item = db.query(ChecklistItem).filter(ChecklistItem.id == item_id, ChecklistItem.card_id == c_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Checklist item not found")
+    
+    db.delete(item)
+    db.commit()
     return {"success": True}
 
 @app.post("/api/ai/test")

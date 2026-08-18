@@ -77,10 +77,17 @@ export async function createCard(columnId: string, title: string, details: strin
   });
 }
 
-export async function updateCard(cardId: string, title: string, details: string): Promise<void> {
+export async function updateCard(
+  cardId: string, 
+  title: string, 
+  details: string,
+  dueDate?: string | null,
+  priority?: string | null,
+  tags?: string[] | null
+): Promise<void> {
   await fetchApi('/api/cards/' + cardId, {
     method: 'PUT',
-    body: JSON.stringify({ title, details }),
+    body: JSON.stringify({ title, details, dueDate, priority, tags }),
   });
 }
 
@@ -118,5 +125,36 @@ export async function chatWithAI(message: string): Promise<{
   return fetchApi('/api/ai/chat', {
     method: 'POST',
     body: JSON.stringify({ message }),
+  });
+}
+
+// Checklist API functions
+export async function addChecklistItem(cardId: string, text: string): Promise<{
+  id: number;
+  text: string;
+  completed: boolean;
+  position: number;
+}> {
+  return fetchApi(`/api/cards/${cardId}/checklist`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  });
+}
+
+export async function updateChecklistItem(
+  cardId: string,
+  itemId: number,
+  text?: string,
+  completed?: boolean
+): Promise<void> {
+  await fetchApi(`/api/cards/${cardId}/checklist/${itemId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ text, completed }),
+  });
+}
+
+export async function deleteChecklistItem(cardId: string, itemId: number): Promise<void> {
+  await fetchApi(`/api/cards/${cardId}/checklist/${itemId}`, {
+    method: 'DELETE',
   });
 }

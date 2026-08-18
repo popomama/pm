@@ -346,7 +346,14 @@ export const KanbanBoard = () => {
     }
   };
 
-  const handleUpdateCard = async (cardId: string, title: string, details: string) => {
+  const handleUpdateCard = async (
+    cardId: string, 
+    title: string, 
+    details: string,
+    dueDate?: string | null,
+    priority?: string | null,
+    tags?: string[] | null
+  ) => {
     if (!board) return;
 
     const oldCard = board.cards[cardId];
@@ -356,12 +363,15 @@ export const KanbanBoard = () => {
       ...board,
       cards: {
         ...board.cards,
-        [cardId]: { ...board.cards[cardId], title, details },
+        [cardId]: { ...board.cards[cardId], title, details, dueDate, priority, tags },
       },
     });
 
     try {
-      await api.updateCard(cardId, title, details);
+      await api.updateCard(cardId, title, details, dueDate, priority, tags);
+      
+      // Refresh board to get updated checklist items
+      await refreshBoard();
       
       // Add to undo history
       const action = updateCardAction(

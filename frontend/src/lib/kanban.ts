@@ -1,7 +1,18 @@
+export type ChecklistItem = {
+  id: number;
+  text: string;
+  completed: boolean;
+  position: number;
+};
+
 export type Card = {
   id: string;
   title: string;
   details: string;
+  dueDate?: string | null;
+  priority?: string | null;
+  tags?: string[] | null;
+  checklistItems?: ChecklistItem[] | null;
 };
 
 export type Column = {

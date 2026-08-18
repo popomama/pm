@@ -32,11 +32,37 @@ def get_user_board(db: Session, username: str, board_id: Optional[int] = None) -
         for card in cards:
             card_id = f"card-{card.id}"
             card_ids.append(card_id)
+            
+            # Parse tags from JSON string
+            import json
+            tags = None
+            if card.tags:
+                try:
+                    tags = json.loads(card.tags)
+                except:
+                    tags = None
+            
+            # Get checklist items
+            from api_models import ChecklistItemResponse
+            checklist_items = [
+                ChecklistItemResponse(
+                    id=item.id,
+                    text=item.text,
+                    completed=item.completed,
+                    position=item.position
+                )
+                for item in card.checklist_items
+            ]
+            
             cards_response[card_id] = CardResponse(
                 id=card_id,
                 title=card.title,
                 details=card.details,
-                columnId=f"col-{col.id}"
+                columnId=f"col-{col.id}",
+                dueDate=card.due_date.isoformat() if card.due_date else None,
+                priority=card.priority,
+                tags=tags,
+                checklistItems=checklist_items if checklist_items else None
             )
         
         columns_response.append(ColumnResponse(
@@ -85,7 +111,8 @@ def create_card(db: Session, username: str, column_id: str, title: str, details:
         columnId=column_id
     )
 
-def update_card(db: Session, username: str, card_id: str, title: Optional[str], details: Optional[str]) -> bool:
+def update_card(db: Session, username: str, card_id: str, title: Optional[str] = None, details: Optional[str] = None, 
+                due_date: Optional[str] = None, priority: Optional[str] = None, tags: Optional[list] = None) -> bool:
     user = db.query(User).filter(User.username == username).first()
     if not user:
         return False
@@ -102,6 +129,14 @@ def update_card(db: Session, username: str, card_id: str, title: Optional[str], 
         card.title = title
     if details is not None:
         card.details = details
+    if due_date is not None:
+        from datetime import datetime
+        card.due_date = datetime.fromisoformat(due_date) if due_date else None
+    if priority is not None:
+        card.priority = priority
+    if tags is not None:
+        import json
+        card.tags = json.dumps(tags) if tags else None
     
     db.commit()
     return True

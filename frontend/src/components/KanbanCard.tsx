@@ -43,6 +43,42 @@ export const KanbanCard = ({ card, onDelete, onEdit, searchQuery = "" }: KanbanC
               <HighlightedText text={card.details} highlight={searchQuery} />
             </p>
           )}
+          
+          {/* Metadata badges */}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {card.priority && (
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
+                card.priority === 'critical' ? 'bg-red-100 text-red-700' :
+                card.priority === 'high' ? 'bg-orange-100 text-orange-700' :
+                card.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                'bg-blue-100 text-blue-700'
+              }`}>
+                {card.priority}
+              </span>
+            )}
+            
+            {card.dueDate && (
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
+                new Date(card.dueDate) < new Date() 
+                  ? 'bg-red-100 text-red-700' 
+                  : 'bg-gray-100 text-gray-700'
+              }`}>
+                📅 {new Date(card.dueDate).toLocaleDateString()}
+              </span>
+            )}
+            
+            {card.tags && card.tags.length > 0 && card.tags.map(tag => (
+              <span key={tag} className="inline-flex items-center rounded-full bg-[var(--primary-blue)] px-2 py-0.5 text-xs font-semibold text-white">
+                {tag}
+              </span>
+            ))}
+            
+            {card.checklistItems && card.checklistItems.length > 0 && (
+              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700">
+                ✓ {card.checklistItems.filter(item => item.completed).length}/{card.checklistItems.length}
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex gap-1">
           <button

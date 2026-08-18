@@ -61,13 +61,36 @@ class Card(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     details: Mapped[str] = mapped_column(Text, default='')
     position: Mapped[int] = mapped_column(nullable=False)
+    
+    # Metadata fields
+    due_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    priority: Mapped[str | None] = mapped_column(String, nullable=True)  # 'low', 'medium', 'high', 'critical'
+    tags: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of tag strings
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     column: Mapped["Column"] = relationship(back_populates="cards")
+    checklist_items: Mapped[list["ChecklistItem"]] = relationship(back_populates="card", cascade="all, delete-orphan")
     
     __table_args__ = (
         Index('ix_column_position', 'column_id', 'position'),
+    )
+
+class ChecklistItem(Base):
+    __tablename__ = 'checklist_items'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey('cards.id', ondelete='CASCADE'), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(String, nullable=False)
+    completed: Mapped[bool] = mapped_column(nullable=False, default=False)
+    position: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    card: Mapped["Card"] = relationship(back_populates="checklist_items")
+    
+    __table_args__ = (
+        Index('ix_card_position', 'card_id', 'position'),
     )
 
 class Session(Base):
