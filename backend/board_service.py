@@ -54,6 +54,24 @@ def get_user_board(db: Session, username: str, board_id: Optional[int] = None) -
                 for item in card.checklist_items
             ]
             
+            # Get attachment count
+            attachment_count = len(card.attachments) if card.attachments else 0
+            
+            # Get custom labels
+            card_labels = [
+                {
+                    "id": cl.label.id,
+                    "name": cl.label.name,
+                    "color": cl.label.color
+                }
+                for cl in card.card_labels
+            ] if card.card_labels else None
+            
+            # Get custom field values
+            field_values = {}
+            for fv in card.field_values:
+                field_values[str(fv.field_id)] = fv.value
+            
             cards_response[card_id] = CardResponse(
                 id=card_id,
                 title=card.title,
@@ -62,7 +80,10 @@ def get_user_board(db: Session, username: str, board_id: Optional[int] = None) -
                 dueDate=card.due_date.isoformat() if card.due_date else None,
                 priority=card.priority,
                 tags=tags,
-                checklistItems=checklist_items if checklist_items else None
+                checklistItems=checklist_items if checklist_items else None,
+                attachmentCount=attachment_count if attachment_count > 0 else None,
+                customLabels=card_labels,
+                customFieldValues=field_values if field_values else None
             )
         
         columns_response.append(ColumnResponse(

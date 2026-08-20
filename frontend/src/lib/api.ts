@@ -204,3 +204,149 @@ export async function reorderColumns(
     body: JSON.stringify({ columnOrder }),
   });
 }
+
+// Attachment functions
+export interface Attachment {
+  id: number;
+  filename: string;
+  size: number;
+  mimeType: string;
+  uploadedAt: string;
+}
+
+export async function uploadAttachment(cardId: string, file: File): Promise<Attachment> {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const response = await fetch(`${API_BASE}/api/cards/${cardId}/attachments`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  });
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+    throw new ApiError(response.status, error.error || error.detail || 'Upload failed');
+  }
+  
+  return response.json();
+}
+
+export async function getAttachments(cardId: string): Promise<{ attachments: Attachment[] }> {
+  return fetchApi(`/api/cards/${cardId}/attachments`);
+}
+
+export async function downloadAttachment(attachmentId: number): Promise<void> {
+  window.open(`${API_BASE}/api/attachments/${attachmentId}/download`, '_blank');
+}
+
+export async function deleteAttachment(attachmentId: number): Promise<{ success: boolean }> {
+  return fetchApi(`/api/attachments/${attachmentId}`, {
+    method: 'DELETE',
+  });
+}
+
+// Label functions
+export interface Label {
+  id: number;
+  name: string;
+  color: string;
+}
+
+export async function getBoardLabels(boardId: number): Promise<{ labels: Label[] }> {
+  return fetchApi(`/api/boards/${boardId}/labels`);
+}
+
+export async function createLabel(boardId: number, name: string, color: string): Promise<Label> {
+  return fetchApi(`/api/boards/${boardId}/labels`, {
+    method: 'POST',
+    body: JSON.stringify({ name, color }),
+  });
+}
+
+export async function updateLabel(labelId: number, name: string, color: string): Promise<Label> {
+  return fetchApi(`/api/labels/${labelId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name, color }),
+  });
+}
+
+export async function deleteLabel(labelId: number): Promise<{ success: boolean }> {
+  return fetchApi(`/api/labels/${labelId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function addLabelToCard(cardId: string, labelId: number): Promise<{ success: boolean }> {
+  return fetchApi(`/api/cards/${cardId}/labels/${labelId}`, {
+    method: 'POST',
+  });
+}
+
+export async function removeLabelFromCard(cardId: string, labelId: number): Promise<{ success: boolean }> {
+  return fetchApi(`/api/cards/${cardId}/labels/${labelId}`, {
+    method: 'DELETE',
+  });
+}
+
+// Custom field functions
+export interface CustomField {
+  id: number;
+  name: string;
+  fieldType: 'text' | 'number' | 'date' | 'dropdown';
+  options?: string[] | null;
+  position: number;
+}
+
+export async function getBoardFields(boardId: number): Promise<{ fields: CustomField[] }> {
+  return fetchApi(`/api/boards/${boardId}/fields`);
+}
+
+export async function createField(
+  boardId: number,
+  name: string,
+  fieldType: string,
+  options?: string[]
+): Promise<CustomField> {
+  return fetchApi(`/api/boards/${boardId}/fields`, {
+    method: 'POST',
+    body: JSON.stringify({ name, fieldType, options }),
+  });
+}
+
+export async function updateField(
+  fieldId: number,
+  name: string,
+  options?: string[]
+): Promise<CustomField> {
+  return fetchApi(`/api/fields/${fieldId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name, options }),
+  });
+}
+
+export async function deleteField(fieldId: number): Promise<{ success: boolean }> {
+  return fetchApi(`/api/fields/${fieldId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function setFieldValue(
+  cardId: string,
+  fieldId: number,
+  value: string
+): Promise<{ success: boolean }> {
+  return fetchApi(`/api/cards/${cardId}/fields/${fieldId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function clearFieldValue(
+  cardId: string,
+  fieldId: number
+): Promise<{ success: boolean }> {
+  return fetchApi(`/api/cards/${cardId}/fields/${fieldId}`, {
+    method: 'DELETE',
+  });
+}

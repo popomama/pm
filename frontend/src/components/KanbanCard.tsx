@@ -78,6 +78,12 @@ export const KanbanCard = ({ card, onDelete, onEdit, searchQuery = "" }: KanbanC
                 ✓ {card.checklistItems.filter(item => item.completed).length}/{card.checklistItems.length}
               </span>
             )}
+            
+            {card.attachmentCount && card.attachmentCount > 0 && (
+              <span className="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-semibold text-purple-700">
+                📎 {card.attachmentCount}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex gap-1">

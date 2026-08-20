@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import type { Card, ChecklistItem } from "@/lib/kanban";
 import * as api from "@/lib/api";
+import { AttachmentUpload } from "@/components/AttachmentUpload";
+import { AttachmentList } from "@/components/AttachmentList";
 
 interface CardEditModalProps {
   card: Card;
@@ -29,7 +31,8 @@ export const CardEditModal = ({ card, isOpen, onClose, onSave }: CardEditModalPr
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>(card.checklistItems || []);
   const [newChecklistItem, setNewChecklistItem] = useState("");
   
-  const [activeTab, setActiveTab] = useState<"details" | "metadata" | "checklist">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "metadata" | "checklist" | "attachments">("details");
+  const [attachmentRefresh, setAttachmentRefresh] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -204,6 +207,16 @@ export const CardEditModal = ({ card, isOpen, onClose, onSave }: CardEditModalPr
                 }`}
               >
                 Checklist {checklistItems.length > 0 && `(${completedCount}/${checklistItems.length})`}
+              </button>
+              <button
+                onClick={() => setActiveTab("attachments")}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                  activeTab === "attachments"
+                    ? "bg-[var(--primary-blue)] text-white"
+                    : "bg-[var(--surface)] text-[var(--navy-dark)] hover:bg-[var(--stroke)]"
+                }`}
+              >
+                Attachments
               </button>
             </div>
           </div>
@@ -418,6 +431,20 @@ export const CardEditModal = ({ card, isOpen, onClose, onSave }: CardEditModalPr
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* Attachments Tab */}
+            {activeTab === "attachments" && (
+              <div className="space-y-4">
+                <AttachmentUpload
+                  cardId={card.id}
+                  onUploadComplete={() => setAttachmentRefresh(prev => prev + 1)}
+                />
+                <AttachmentList
+                  cardId={card.id}
+                  refreshTrigger={attachmentRefresh}
+                />
               </div>
             )}
           </div>

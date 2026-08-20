@@ -29,6 +29,11 @@ import { ManageBoardsModal } from "@/components/ManageBoardsModal";
 import { AddColumnModal } from "@/components/AddColumnModal";
 import { ColumnSettingsModal } from "@/components/ColumnSettingsModal";
 import { SortableColumn } from "@/components/SortableColumn";
+import { ListView } from "@/components/ListView";
+import { CalendarView } from "@/components/CalendarView";
+import { ExportMenu } from "@/components/ExportMenu";
+import { ReportsModal } from "@/components/ReportsModal";
+import { PrintView } from "@/components/PrintView";
 import { createId, moveCard, type BoardData, type Card, type Column } from "@/lib/kanban";
 import { useSearch } from "@/hooks/useSearch";
 import { useActionHistory } from "@/hooks/useActionHistory";
@@ -48,6 +53,7 @@ export const KanbanBoard = () => {
   const [boards, setBoards] = useState<BoardSummary[]>([]);
   const [currentBoardId, setCurrentBoardId] = useState<number | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [currentView, setCurrentView] = useState<'kanban' | 'list' | 'calendar'>('kanban');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -57,6 +63,8 @@ export const KanbanBoard = () => {
   const [isAddColumnModalOpen, setIsAddColumnModalOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<Column | null>(null);
   const [isCreateBoardOpen, setIsCreateBoardOpen] = useState(false);
+  const [isReportsOpen, setIsReportsOpen] = useState(false);
+  const [isPrintView, setIsPrintView] = useState(false);
   const [isManageBoardsOpen, setIsManageBoardsOpen] = useState(false);
   const [focusedColumnIndex, setFocusedColumnIndex] = useState<number | null>(null);
 
@@ -632,6 +640,11 @@ export const KanbanBoard = () => {
               >
                 + Add Column
               </button>
+              <ExportMenu
+                board={board}
+                onViewReports={() => setIsReportsOpen(true)}
+                onPrint={() => setIsPrintView(true)}
+              />
               <button
                 onClick={() => setIsChatOpen(true)}
                 className="rounded-2xl border border-[var(--stroke)] bg-gradient-to-r from-[var(--primary-blue)] to-[var(--secondary-purple)] px-5 py-4 text-sm font-semibold text-white transition hover:opacity-90"
@@ -647,15 +660,51 @@ export const KanbanBoard = () => {
             </div>
           </div>
           
-          <SearchBar
-            searchQuery={searchQuery}
-            filterColumn={filterColumn}
-            onSearchChange={setSearchQuery}
-            onFilterChange={setFilterColumn}
-            columns={board.columns}
-            matchCount={matchCount}
-            hasActiveFilters={hasActiveFilters}
-          />
+          <div className="flex items-center gap-4">
+            <SearchBar
+              searchQuery={searchQuery}
+              filterColumn={filterColumn}
+              onSearchChange={setSearchQuery}
+              onFilterChange={setFilterColumn}
+              columns={board.columns}
+              matchCount={matchCount}
+              hasActiveFilters={hasActiveFilters}
+            />
+            
+            {/* View Switcher */}
+            <div className="flex gap-1 bg-white rounded-2xl border border-[var(--stroke)] p-1">
+              <button
+                onClick={() => setCurrentView('kanban')}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                  currentView === 'kanban'
+                    ? 'bg-[var(--primary-blue)] text-white'
+                    : 'text-[var(--gray-text)] hover:text-[var(--navy-dark)]'
+                }`}
+              >
+                Board
+              </button>
+              <button
+                onClick={() => setCurrentView('list')}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                  currentView === 'list'
+                    ? 'bg-[var(--primary-blue)] text-white'
+                    : 'text-[var(--gray-text)] hover:text-[var(--navy-dark)]'
+                }`}
+              >
+                List
+              </button>
+              <button
+                onClick={() => setCurrentView('calendar')}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                  currentView === 'calendar'
+                    ? 'bg-[var(--primary-blue)] text-white'
+                    : 'text-[var(--gray-text)] hover:text-[var(--navy-dark)]'
+                }`}
+              >
+                Calendar
+              </button>
+            </div>
+          </div>
 
           <div className="flex flex-wrap items-center gap-4">
             {board.columns.map((column) => (
@@ -670,7 +719,24 @@ export const KanbanBoard = () => {
           </div>
         </header>
 
-        <DndContext
+        {/* Render different views based on currentView */}
+        {currentView === 'list' && (
+          <ListView
+            cards={board.cards}
+            columns={board.columns}
+            onEditCard={setEditingCard}
+          />
+        )}
+
+        {currentView === 'calendar' && (
+          <CalendarView
+            cards={board.cards}
+            onEditCard={setEditingCard}
+          />
+        )}
+
+        {currentView === 'kanban' && (
+          <DndContext
           sensors={sensors}
           collisionDetection={customCollisionDetection}
           onDragStart={handleDragStart}
@@ -707,6 +773,7 @@ export const KanbanBoard = () => {
             ) : null}
           </DragOverlay>
         </DndContext>
+        )}
       </main>
 
       <ChatSidebar
@@ -766,6 +833,23 @@ export const KanbanBoard = () => {
         onUpdate={handleUpdateColumn}
         onDelete={handleDeleteColumn}
       />
+
+      {board && (
+        <>
+          <ReportsModal
+            board={board}
+            isOpen={isReportsOpen}
+            onClose={() => setIsReportsOpen(false)}
+          />
+
+          {isPrintView && (
+            <PrintView
+              board={board}
+              onClose={() => setIsPrintView(false)}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 };

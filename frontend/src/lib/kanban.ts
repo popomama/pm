@@ -5,6 +5,12 @@ export type ChecklistItem = {
   position: number;
 };
 
+export type CustomLabel = {
+  id: number;
+  name: string;
+  color: string;
+};
+
 export type Card = {
   id: string;
   title: string;
@@ -13,6 +19,9 @@ export type Card = {
   priority?: string | null;
   tags?: string[] | null;
   checklistItems?: ChecklistItem[] | null;
+  attachmentCount?: number | null;
+  customLabels?: CustomLabel[] | null;
+  customFieldValues?: Record<string, string> | null;
 };
 
 export type Column = {

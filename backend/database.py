@@ -14,23 +14,33 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    email: Mapped[str | None] = mapped_column(String, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     
-    boards: Mapped[List["Board"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    boards: Mapped[List["Board"]] = relationship(back_populates="user", foreign_keys="Board.user_id", cascade="all, delete-orphan")
+    owned_boards: Mapped[List["Board"]] = relationship(back_populates="owner", foreign_keys="Board.owner_id")
+    board_memberships: Mapped[List["BoardMember"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 class Board(Base):
     __tablename__ = 'boards'
     
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False, index=True)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
     is_archived: Mapped[bool] = mapped_column(nullable=False, default=False)
     template_name: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    user: Mapped["User"] = relationship(back_populates="boards")
+    user: Mapped["User"] = relationship(back_populates="boards", foreign_keys=[user_id])
+    owner: Mapped["User"] = relationship(back_populates="owned_boards", foreign_keys=[owner_id])
     columns: Mapped[List["Column"]] = relationship(back_populates="board", cascade="all, delete-orphan", order_by="Column.position")
+    labels: Mapped[List["BoardLabel"]] = relationship(back_populates="board", cascade="all, delete-orphan")
+    custom_fields: Mapped[List["CustomField"]] = relationship(back_populates="board", cascade="all, delete-orphan", order_by="CustomField.position")
+    members: Mapped[List["BoardMember"]] = relationship(back_populates="board", cascade="all, delete-orphan")
     
     __table_args__ = (
         Index('ix_user_archived', 'user_id', 'is_archived'),
@@ -73,6 +83,9 @@ class Card(Base):
     
     column: Mapped["Column"] = relationship(back_populates="cards")
     checklist_items: Mapped[list["ChecklistItem"]] = relationship(back_populates="card", cascade="all, delete-orphan")
+    attachments: Mapped[list["CardAttachment"]] = relationship(back_populates="card", cascade="all, delete-orphan")
+    card_labels: Mapped[list["CardLabel"]] = relationship(back_populates="card", cascade="all, delete-orphan")
+    field_values: Mapped[list["CardFieldValue"]] = relationship(back_populates="card", cascade="all, delete-orphan")
     
     __table_args__ = (
         Index('ix_column_position', 'column_id', 'position'),
@@ -118,6 +131,92 @@ class ChatMessage(Base):
     
     __table_args__ = (
         Index('ix_user_created', 'user_id', 'created_at'),
+    )
+
+class CardAttachment(Base):
+    __tablename__ = 'card_attachments'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey('cards.id', ondelete='CASCADE'), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String, nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String, nullable=False)
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    card: Mapped["Card"] = relationship(back_populates="attachments")
+    user: Mapped["User"] = relationship()
+    
+    __table_args__ = (
+        Index('ix_card_attachments_card_id', 'card_id'),
+    )
+
+class BoardLabel(Base):
+    __tablename__ = 'board_labels'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    board_id: Mapped[int] = mapped_column(ForeignKey('boards.id', ondelete='CASCADE'), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    color: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    board: Mapped["Board"] = relationship(back_populates="labels")
+    card_labels: Mapped[list["CardLabel"]] = relationship(back_populates="label", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('ix_board_labels_board_id', 'board_id'),
+    )
+
+class CardLabel(Base):
+    __tablename__ = 'card_labels'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey('cards.id', ondelete='CASCADE'), nullable=False, index=True)
+    label_id: Mapped[int] = mapped_column(ForeignKey('board_labels.id', ondelete='CASCADE'), nullable=False, index=True)
+    
+    card: Mapped["Card"] = relationship(back_populates="card_labels")
+    label: Mapped["BoardLabel"] = relationship(back_populates="card_labels")
+    
+    __table_args__ = (
+        Index('ix_card_labels_card_id', 'card_id'),
+        Index('ix_card_labels_label_id', 'label_id'),
+        UniqueConstraint('card_id', 'label_id', name='uq_card_label'),
+    )
+
+class CustomField(Base):
+    __tablename__ = 'custom_fields'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    board_id: Mapped[int] = mapped_column(ForeignKey('boards.id', ondelete='CASCADE'), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    field_type: Mapped[str] = mapped_column(String, nullable=False)  # 'text', 'number', 'date', 'dropdown'
+    options: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array for dropdown options
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    board: Mapped["Board"] = relationship(back_populates="custom_fields")
+    field_values: Mapped[list["CardFieldValue"]] = relationship(back_populates="field", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('ix_custom_fields_board_id', 'board_id'),
+    )
+
+class CardFieldValue(Base):
+    __tablename__ = 'card_field_values'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey('cards.id', ondelete='CASCADE'), nullable=False, index=True)
+    field_id: Mapped[int] = mapped_column(ForeignKey('custom_fields.id', ondelete='CASCADE'), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    card: Mapped["Card"] = relationship(back_populates="field_values")
+    field: Mapped["CustomField"] = relationship(back_populates="field_values")
+    
+    __table_args__ = (
+        Index('ix_card_field_values_card_id', 'card_id'),
+        Index('ix_card_field_values_field_id', 'field_id'),
+        UniqueConstraint('card_id', 'field_id', name='uq_card_field'),
     )
 
 db_path = Path(__file__).parent.parent / "data" / "kanban.db"
@@ -210,6 +309,22 @@ def init_db():
             print(f"Database initialized with default user and board")
     finally:
         db.close()
+
+class BoardMember(Base):
+    __tablename__ = 'board_members'
+    
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    board_id: Mapped[int] = mapped_column(ForeignKey('boards.id'), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String, nullable=False)  # 'owner', 'editor', 'viewer'
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    board: Mapped["Board"] = relationship(back_populates="members")
+    user: Mapped["User"] = relationship(back_populates="board_memberships")
+    
+    __table_args__ = (
+        UniqueConstraint('board_id', 'user_id', name='uq_board_user'),
+    )
 
 def get_db():
     db = SessionLocal()

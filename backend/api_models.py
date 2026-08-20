@@ -17,6 +17,9 @@ class CardResponse(BaseModel):
     priority: Optional[str] = None
     tags: Optional[List[str]] = None
     checklistItems: Optional[List[ChecklistItemResponse]] = None
+    attachmentCount: Optional[int] = None
+    customLabels: Optional[List[dict]] = None
+    customFieldValues: Optional[dict] = None
 
 class ColumnResponse(BaseModel):
     id: str

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Cookie, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Cookie, Depends, BackgroundTasks, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from typing import Optional
 import os
 import asyncio
+import uuid
+import mimetypes
 from auth import create_session, validate_session, delete_session, verify_credentials, cleanup_expired_sessions
 from database import init_db, get_db, SessionLocal
 from sqlalchemy.orm import Session
@@ -50,11 +52,63 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    email: str
+    display_name: Optional[str] = None
+
+class UpdateProfileRequest(BaseModel):
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+class AddBoardMemberRequest(BaseModel):
+    user_id: int
+    role: str  # 'owner', 'editor', 'viewer'
+
+class UpdateMemberRoleRequest(BaseModel):
+    role: str
+
 def get_current_user(session_token: str = Cookie(None)) -> str:
     username = validate_session(session_token)
     if not username:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return username
+
+def check_board_permission(board_id: int, username: str, required_role: str, db: Session) -> bool:
+    """
+    Check if user has required permission level for a board.
+    Roles hierarchy: owner > editor > viewer
+    """
+    from database import User, Board, BoardMember
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        return False
+    
+    board = db.query(Board).filter(Board.id == board_id).first()
+    if not board:
+        return False
+    
+    # Owner has all permissions
+    if board.owner_id == user.id:
+        return True
+    
+    # Check membership
+    membership = db.query(BoardMember).filter(
+        BoardMember.board_id == board_id,
+        BoardMember.user_id == user.id
+    ).first()
+    
+    if not membership:
+        return False
+    
+    # Check role hierarchy
+    role_hierarchy = {'owner': 3, 'editor': 2, 'viewer': 1}
+    user_level = role_hierarchy.get(membership.role, 0)
+    required_level = role_hierarchy.get(required_role, 0)
+    
+    return user_level >= required_level
 
 LOGIN_PAGE_HTML = """
 <!DOCTYPE html>
@@ -311,6 +365,131 @@ async def logout(session_token: str = Cookie(None)):
     response.delete_cookie("session_token")
     return response
 
+@app.post("/api/auth/register")
+async def register(request: RegisterRequest, db: Session = Depends(get_db)):
+    from database import User, hash_password
+    
+    # Check if username already exists
+    existing_user = db.query(User).filter(User.username == request.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    # Check if email already exists
+    if request.email:
+        existing_email = db.query(User).filter(User.email == request.email).first()
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Email already exists")
+    
+    # Create new user
+    new_user = User(
+        username=request.username,
+        password_hash=hash_password(request.password),
+        email=request.email,
+        display_name=request.display_name or request.username
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    # Create session for new user
+    session_token = create_session(request.username)
+    
+    response = JSONResponse(content={
+        "success": True,
+        "user": {
+            "id": new_user.id,
+            "username": new_user.username,
+            "email": new_user.email,
+            "display_name": new_user.display_name
+        }
+    })
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        max_age=86400,
+        samesite="lax"
+    )
+    return response
+
+@app.get("/api/users/me")
+async def get_current_user_profile(
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from database import User
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "created_at": user.created_at.isoformat() if user.created_at else None
+    }
+
+@app.put("/api/users/me")
+async def update_current_user_profile(
+    request: UpdateProfileRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from database import User
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if request.display_name is not None:
+        user.display_name = request.display_name
+    if request.avatar_url is not None:
+        user.avatar_url = request.avatar_url
+    
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "success": True,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "display_name": user.display_name,
+            "avatar_url": user.avatar_url
+        }
+    }
+
+@app.get("/api/users/search")
+async def search_users(
+    q: str,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from database import User
+    
+    if len(q) < 2:
+        return {"users": []}
+    
+    users = db.query(User).filter(
+        (User.username.like(f"%{q}%")) | (User.email.like(f"%{q}%"))
+    ).limit(10).all()
+    
+    return {
+        "users": [
+            {
+                "id": user.id,
+                "username": user.username,
+                "display_name": user.display_name,
+                "avatar_url": user.avatar_url
+            }
+            for user in users
+        ]
+    }
+
 @app.get("/api/auth/session")
 async def check_session(session_token: str = Cookie(None)):
     username = validate_session(session_token)
@@ -331,17 +510,29 @@ async def get_boards(
     username: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all boards for the current user."""
-    from database import User, Board
+    """Get all boards for the current user (owned or member)."""
+    from database import User, Board, BoardMember
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    query = db.query(Board).filter(Board.user_id == user.id)
+    # Get boards where user is owner or member
+    owned_query = db.query(Board).filter(Board.owner_id == user.id)
     if not include_archived:
-        query = query.filter(Board.is_archived == False)
+        owned_query = owned_query.filter(Board.is_archived == False)
+    owned_boards = owned_query.all()
     
-    boards = query.order_by(Board.updated_at.desc()).all()
+    member_query = db.query(Board).join(BoardMember).filter(
+        BoardMember.user_id == user.id,
+        Board.owner_id != user.id  # Don't duplicate owned boards
+    )
+    if not include_archived:
+        member_query = member_query.filter(Board.is_archived == False)
+    member_boards = member_query.all()
+    
+    all_boards = owned_boards + member_boards
+    all_boards.sort(key=lambda b: b.updated_at, reverse=True)
+    
     return {
         "boards": [
             {
@@ -351,8 +542,9 @@ async def get_boards(
                 "template_name": board.template_name,
                 "created_at": board.created_at.isoformat(),
                 "updated_at": board.updated_at.isoformat(),
+                "is_owner": board.owner_id == user.id
             }
-            for board in boards
+            for board in all_boards
         ]
     }
 
@@ -526,6 +718,147 @@ async def duplicate_board(
         "title": new_board.title,
         "created_at": new_board.created_at.isoformat()
     }
+
+# Board Sharing Endpoints
+
+@app.get("/api/boards/{board_id}/members")
+async def get_board_members(
+    board_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all members of a board."""
+    from database import BoardMember
+    
+    if not check_board_permission(board_id, username, 'viewer', db):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    members = db.query(BoardMember).filter(BoardMember.board_id == board_id).all()
+    
+    return {
+        "members": [
+            {
+                "id": member.id,
+                "user_id": member.user_id,
+                "username": member.user.username,
+                "display_name": member.user.display_name,
+                "avatar_url": member.user.avatar_url,
+                "role": member.role,
+                "created_at": member.created_at.isoformat()
+            }
+            for member in members
+        ]
+    }
+
+@app.post("/api/boards/{board_id}/members")
+async def add_board_member(
+    board_id: int,
+    request: AddBoardMemberRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add a member to a board (owner only)."""
+    from database import Board, BoardMember, User
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.owner_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=403, detail="Only board owner can add members")
+    
+    existing = db.query(BoardMember).filter(
+        BoardMember.board_id == board_id,
+        BoardMember.user_id == request.user_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="User is already a member")
+    
+    if request.role not in ['owner', 'editor', 'viewer']:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    
+    new_member = BoardMember(
+        board_id=board_id,
+        user_id=request.user_id,
+        role=request.role
+    )
+    db.add(new_member)
+    db.commit()
+    db.refresh(new_member)
+    
+    return {
+        "success": True,
+        "member": {
+            "id": new_member.id,
+            "user_id": new_member.user_id,
+            "role": new_member.role
+        }
+    }
+
+@app.put("/api/boards/{board_id}/members/{user_id}")
+async def update_member_role(
+    board_id: int,
+    user_id: int,
+    request: UpdateMemberRoleRequest,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a member's role (owner only)."""
+    from database import Board, BoardMember, User
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.owner_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=403, detail="Only board owner can update member roles")
+    
+    if request.role not in ['owner', 'editor', 'viewer']:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    
+    member = db.query(BoardMember).filter(
+        BoardMember.board_id == board_id,
+        BoardMember.user_id == user_id
+    ).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    
+    member.role = request.role
+    db.commit()
+    
+    return {"success": True, "role": member.role}
+
+@app.delete("/api/boards/{board_id}/members/{user_id}")
+async def remove_board_member(
+    board_id: int,
+    user_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a member from a board (owner only)."""
+    from database import Board, BoardMember, User
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.owner_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=403, detail="Only board owner can remove members")
+    
+    member = db.query(BoardMember).filter(
+        BoardMember.board_id == board_id,
+        BoardMember.user_id == user_id
+    ).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    
+    db.delete(member)
+    db.commit()
+    
+    return {"success": True}
 
 @app.post("/api/cards")
 async def create_new_card(
@@ -843,6 +1176,553 @@ async def delete_checklist_item(
     
     db.delete(item)
     db.commit()
+    return {"success": True}
+
+# File attachment endpoints
+UPLOAD_DIR = Path(__file__).parent.parent / "data" / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+@app.post("/api/cards/{card_id}/attachments")
+async def upload_attachment(
+    card_id: str,
+    file: UploadFile = File(...),
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload a file attachment to a card."""
+    from database import User, Card, CardAttachment
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    # Read file content
+    content = await file.read()
+    file_size = len(content)
+    
+    # Validate file size
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_FILE_SIZE / 1024 / 1024}MB")
+    
+    # Generate unique filename
+    file_extension = Path(file.filename).suffix
+    unique_filename = f"{uuid.uuid4()}{file_extension}"
+    file_path = UPLOAD_DIR / unique_filename
+    
+    # Save file
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    # Determine MIME type
+    mime_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
+    
+    # Create database record
+    attachment = CardAttachment(
+        card_id=c_id,
+        filename=unique_filename,
+        original_filename=file.filename,
+        file_size=file_size,
+        mime_type=mime_type,
+        uploaded_by=user.id
+    )
+    db.add(attachment)
+    db.commit()
+    db.refresh(attachment)
+    
+    return {
+        "id": attachment.id,
+        "filename": attachment.original_filename,
+        "size": attachment.file_size,
+        "mimeType": attachment.mime_type,
+        "uploadedAt": attachment.uploaded_at.isoformat()
+    }
+
+@app.get("/api/cards/{card_id}/attachments")
+async def list_attachments(
+    card_id: str,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all attachments for a card."""
+    from database import User, Card, CardAttachment
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    attachments = db.query(CardAttachment).filter(CardAttachment.card_id == c_id).all()
+    
+    return {
+        "attachments": [
+            {
+                "id": att.id,
+                "filename": att.original_filename,
+                "size": att.file_size,
+                "mimeType": att.mime_type,
+                "uploadedAt": att.uploaded_at.isoformat()
+            }
+            for att in attachments
+        ]
+    }
+
+@app.get("/api/attachments/{attachment_id}/download")
+async def download_attachment(
+    attachment_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Download an attachment file."""
+    from database import User, CardAttachment
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    attachment = db.query(CardAttachment).filter(CardAttachment.id == attachment_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    
+    # Verify user owns the card
+    if attachment.card.column.board.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    file_path = UPLOAD_DIR / attachment.filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(
+        path=file_path,
+        filename=attachment.original_filename,
+        media_type=attachment.mime_type
+    )
+
+@app.delete("/api/attachments/{attachment_id}")
+async def delete_attachment(
+    attachment_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an attachment."""
+    from database import User, CardAttachment
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    attachment = db.query(CardAttachment).filter(CardAttachment.id == attachment_id).first()
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    
+    # Verify user owns the card
+    if attachment.card.column.board.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Delete physical file
+    file_path = UPLOAD_DIR / attachment.filename
+    if file_path.exists():
+        file_path.unlink()
+    
+    # Delete database record
+    db.delete(attachment)
+    db.commit()
+    
+    return {"success": True}
+
+# Label endpoints
+@app.get("/api/boards/{board_id}/labels")
+async def get_board_labels(
+    board_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all labels for a board."""
+    from database import User, Board, BoardLabel
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    labels = db.query(BoardLabel).filter(BoardLabel.board_id == board_id).all()
+    
+    return {
+        "labels": [
+            {
+                "id": label.id,
+                "name": label.name,
+                "color": label.color
+            }
+            for label in labels
+        ]
+    }
+
+@app.post("/api/boards/{board_id}/labels")
+async def create_label(
+    board_id: int,
+    label_data: dict,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new label for a board."""
+    from database import User, Board, BoardLabel
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    label = BoardLabel(
+        board_id=board_id,
+        name=label_data["name"],
+        color=label_data["color"]
+    )
+    db.add(label)
+    db.commit()
+    db.refresh(label)
+    
+    return {
+        "id": label.id,
+        "name": label.name,
+        "color": label.color
+    }
+
+@app.put("/api/labels/{label_id}")
+async def update_label(
+    label_id: int,
+    label_data: dict,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a label."""
+    from database import User, BoardLabel
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    label = db.query(BoardLabel).filter(BoardLabel.id == label_id).first()
+    if not label or label.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Label not found")
+    
+    label.name = label_data["name"]
+    label.color = label_data["color"]
+    db.commit()
+    
+    return {
+        "id": label.id,
+        "name": label.name,
+        "color": label.color
+    }
+
+@app.delete("/api/labels/{label_id}")
+async def delete_label(
+    label_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a label."""
+    from database import User, BoardLabel
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    label = db.query(BoardLabel).filter(BoardLabel.id == label_id).first()
+    if not label or label.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Label not found")
+    
+    db.delete(label)
+    db.commit()
+    
+    return {"success": True}
+
+@app.post("/api/cards/{card_id}/labels/{label_id}")
+async def add_label_to_card(
+    card_id: str,
+    label_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add a label to a card."""
+    from database import User, Card, BoardLabel, CardLabel
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    label = db.query(BoardLabel).filter(BoardLabel.id == label_id).first()
+    if not label or label.board_id != card.column.board_id:
+        raise HTTPException(status_code=404, detail="Label not found")
+    
+    # Check if already exists
+    existing = db.query(CardLabel).filter(
+        CardLabel.card_id == c_id,
+        CardLabel.label_id == label_id
+    ).first()
+    
+    if existing:
+        return {"success": True}
+    
+    card_label = CardLabel(card_id=c_id, label_id=label_id)
+    db.add(card_label)
+    db.commit()
+    
+    return {"success": True}
+
+@app.delete("/api/cards/{card_id}/labels/{label_id}")
+async def remove_label_from_card(
+    card_id: str,
+    label_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a label from a card."""
+    from database import User, Card, CardLabel
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    card_label = db.query(CardLabel).filter(
+        CardLabel.card_id == c_id,
+        CardLabel.label_id == label_id
+    ).first()
+    
+    if card_label:
+        db.delete(card_label)
+        db.commit()
+    
+    return {"success": True}
+
+# Custom field endpoints
+@app.get("/api/boards/{board_id}/fields")
+async def get_board_fields(
+    board_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all custom fields for a board."""
+    from database import User, Board, CustomField
+    import json
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    fields = db.query(CustomField).filter(CustomField.board_id == board_id).order_by(CustomField.position).all()
+    
+    return {
+        "fields": [
+            {
+                "id": field.id,
+                "name": field.name,
+                "fieldType": field.field_type,
+                "options": json.loads(field.options) if field.options else None,
+                "position": field.position
+            }
+            for field in fields
+        ]
+    }
+
+@app.post("/api/boards/{board_id}/fields")
+async def create_field(
+    board_id: int,
+    field_data: dict,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new custom field for a board."""
+    from database import User, Board, CustomField
+    import json
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    board = db.query(Board).filter(Board.id == board_id, Board.user_id == user.id).first()
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    
+    # Get next position
+    max_pos = db.query(CustomField).filter(CustomField.board_id == board_id).count()
+    
+    options_json = json.dumps(field_data.get("options")) if field_data.get("options") else None
+    
+    field = CustomField(
+        board_id=board_id,
+        name=field_data["name"],
+        field_type=field_data["fieldType"],
+        options=options_json,
+        position=max_pos
+    )
+    db.add(field)
+    db.commit()
+    db.refresh(field)
+    
+    return {
+        "id": field.id,
+        "name": field.name,
+        "fieldType": field.field_type,
+        "options": json.loads(field.options) if field.options else None,
+        "position": field.position
+    }
+
+@app.put("/api/fields/{field_id}")
+async def update_field(
+    field_id: int,
+    field_data: dict,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a custom field."""
+    from database import User, CustomField
+    import json
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    field = db.query(CustomField).filter(CustomField.id == field_id).first()
+    if not field or field.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Field not found")
+    
+    field.name = field_data["name"]
+    if "options" in field_data:
+        field.options = json.dumps(field_data["options"]) if field_data["options"] else None
+    db.commit()
+    
+    return {
+        "id": field.id,
+        "name": field.name,
+        "fieldType": field.field_type,
+        "options": json.loads(field.options) if field.options else None,
+        "position": field.position
+    }
+
+@app.delete("/api/fields/{field_id}")
+async def delete_field(
+    field_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a custom field."""
+    from database import User, CustomField
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    field = db.query(CustomField).filter(CustomField.id == field_id).first()
+    if not field or field.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Field not found")
+    
+    db.delete(field)
+    db.commit()
+    
+    return {"success": True}
+
+@app.put("/api/cards/{card_id}/fields/{field_id}")
+async def set_field_value(
+    card_id: str,
+    field_id: int,
+    value_data: dict,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Set field value for a card."""
+    from database import User, Card, CustomField, CardFieldValue
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    field = db.query(CustomField).filter(CustomField.id == field_id).first()
+    if not field or field.board_id != card.column.board_id:
+        raise HTTPException(status_code=404, detail="Field not found")
+    
+    # Check if value already exists
+    field_value = db.query(CardFieldValue).filter(
+        CardFieldValue.card_id == c_id,
+        CardFieldValue.field_id == field_id
+    ).first()
+    
+    if field_value:
+        field_value.value = value_data["value"]
+    else:
+        field_value = CardFieldValue(
+            card_id=c_id,
+            field_id=field_id,
+            value=value_data["value"]
+        )
+        db.add(field_value)
+    
+    db.commit()
+    return {"success": True}
+
+@app.delete("/api/cards/{card_id}/fields/{field_id}")
+async def clear_field_value(
+    card_id: str,
+    field_id: int,
+    username: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Clear field value for a card."""
+    from database import User, Card, CardFieldValue
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    c_id = int(card_id.replace("card-", ""))
+    card = db.query(Card).filter(Card.id == c_id).first()
+    if not card or card.column.board.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    
+    field_value = db.query(CardFieldValue).filter(
+        CardFieldValue.card_id == c_id,
+        CardFieldValue.field_id == field_id
+    ).first()
+    
+    if field_value:
+        db.delete(field_value)
+        db.commit()
+    
     return {"success": True}
 
 @app.post("/api/ai/test")
